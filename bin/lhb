@@ -164,10 +164,15 @@ case "$cmd" in
       rc=0; bash "$ENG/loop.sh" "$SD" >> "$SD/loop.log" 2>&1 || rc=$?
       notify_new_flags "$SD"   # D 簇：本拍若有 driver 新举旗，立刻播报（不等全部跑完）
       case "$rc" in
+        0) : ;;   # 推进 / no-op / paused / flock 跳过：继续下一拍
         5) notify abort   "已人工 abort，循环停止"              "$SD"; echo "✗ ABORTED（人工，via inbox）"; break;;
         6) notify p0_gate "P0 未确认：停在门口等你 lhb confirm" "$SD"; echo "✗ P0 未确认（需 lhb confirm）"; break;;
         3) notify blocked "产品熔断（连续失败到上限），来看一下" "$SD"; echo "✗ BLOCKED（产品熔断，需要你）"; break;;
         4) notify blocked "基建/replan 熔断升级，来看一下"      "$SD"; echo "✗ ESCALATED（基建/replan 熔断，需要你）"; break;;
+        # 兜底：loop.sh 契约里 0 才是"继续"，任何其它非零（2 用法/setup 错等）都是终态 → 停下喊人，
+        # 别再空转（再 review 自查：原来只认 3/4/5/6，rc=2 缺 milestones.json 之类仍会空转）。
+        *) notify blocked "loop.sh 异常退出码 $rc（用法/setup/未知错误），停下来看一下" "$SD"
+           echo "✗ loop.sh 退出码 $rc（停止）"; break;;
       esac
       st="$("$PY" "$ENG/state.py" status "$SD" 2>/dev/null | tr -d ' \n')"
       [ "$st" != "$last" ] && { echo "… $("$PY" "$ENG/state.py" status "$SD" 2>/dev/null | "$PY" -c 'import json,sys;d=json.load(sys.stdin);print(d.get("phase"),d.get("by_status"))' 2>/dev/null)"; last="$st"; }
