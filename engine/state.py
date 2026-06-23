@@ -59,8 +59,15 @@ def _atomic_write(path: str, text: str) -> None:
 def _read_json(path: str, default):
     if not os.path.exists(path):
         return default
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, ValueError) as e:
+        # 🔒 损坏/半写的状态文件：绝不静默返回 default —— 那会把坏 milestones 误读成"空/done"、
+        # 把丢了 paused/aborted/p0_confirmed 的坏 cursor 当默认续跑。loud-fail（清晰报错 + 保留现场文件）
+        # 优于 silent-wrong：标榜"崩溃可续跑"的前提是状态可信，不可信就该停下喊人，而非猜（2026-06-23 review）。
+        raise ValueError(
+            "longhaul 状态文件损坏、无法解析（请修复或从备份恢复后重试）：%s —— %s" % (path, e))
 
 
 def _write_json(path: str, obj) -> None:
@@ -214,10 +221,14 @@ def cmd_set_milestones(args) -> int:
     items = incoming["milestones"] if isinstance(incoming, dict) else incoming
     norm = []
     for m in items:
+        mid, goal = m.get("id"), m.get("goal")
+        if not mid or not goal:   # P1：缺必填字段 → 干净的用法错（非裸 KeyError traceback）
+            print("error: milestone 缺必填字段 id/goal：%r" % m, file=sys.stderr)
+            return 2
         status = m.get("status", "TODO")
         norm.append({
-            "id": m["id"],
-            "goal": m["goal"],
+            "id": mid,
+            "goal": goal,
             "acceptance": m.get("acceptance", {}),  # {type, probe}
             "status": status,
             "phase": m.get("phase", _default_phase_for_status(status)),  # F2: 两道门相位
@@ -225,6 +236,11 @@ def cmd_set_milestones(args) -> int:
             "max_attempts": m.get("max_attempts", DEFAULT_MAX_ATTEMPTS),
             "last_error": m.get("last_error"),
         })
+    ids = [m["id"] for m in norm]
+    dups = sorted({i for i in ids if ids.count(i) > 1})
+    if dups:   # P1：重复 id → 第二条永远够不到（_find 只返首个）→ 卡住/收不了尾。拆解时即拦。
+        print("error: milestone id 重复（必须唯一）：%s" % ", ".join(dups), file=sys.stderr)
+        return 2
     save_milestones(run_dir, norm)
     nxt = _next_todo(norm)
     save_cursor(run_dir, {
@@ -232,6 +248,10 @@ def cmd_set_milestones(args) -> int:
         "active_milestone": nxt["id"] if nxt else None,
         "active_phase": nxt.get("phase") if nxt else None,  # F2: 只读镜像
         "active_task": None,
+        # 🔒 P0：新拆解默认"未确认"——显式 flag 优先于惰性判据，堵住"plan 把 phase 推到 build →
+        # is_p0_confirmed 惰性默认放行 → 跳过 lhb confirm 也能派活"的必停门击穿（2026-06-23 review）。
+        # 旧项目（无此 key 的 cursor）仍走 phase==build/已起步 的惰性默认，向后兼容不破坏。
+        "p0_confirmed": False,
         "next_action": (f"claim {nxt['id']} 并细化方案→TDD→实现→验收" if nxt
                         else "全部完成，进入交付"),
     })
@@ -583,12 +603,18 @@ def cmd_confirm(args) -> int:
     m["status"] = "DONE"
     _set_phase(m, "done")
     m["last_error"] = None
+    flag_kind = (m.get("flag") or {}).get("kind")
     m.pop("flag", None)
     save_milestones(run_dir, milestones)
     nxt = _advance_cursor_preserving(run_dir, milestones,
                                      note_for_none="全部 milestone DONE，进入终态验收+交付")
-    append_event(run_dir, "flag_confirmed", milestone=m["id"])
-    print("confirmed %s → DONE; next=%s" % (m["id"], nxt["id"] if nxt else "DONE"))
+    # 🔎 透明化（2026-06-23 review）：举旗步经人 confirm 直送 DONE，**没走门2 代码审**——审计明确留痕
+    # （gate2_bypassed），并在输出提示人这是靠人确认放行（确认前应 lhb report 看实际改了啥），
+    # 绝不让"举旗绕门2"悄悄发生而无记录。
+    append_event(run_dir, "flag_confirmed", milestone=m["id"],
+                 flag_kind=flag_kind, gate2_bypassed=True)
+    print("confirmed %s → DONE（举旗步经人确认放行，未过门2代码审）; next=%s"
+          % (m["id"], nxt["id"] if nxt else "DONE"))
     return 0
 
 

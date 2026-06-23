@@ -67,9 +67,12 @@ load_bindings(){ # <sd>
 notify(){ # <event> <message> <state_dir>
   local ev="$1" msg="$2" sd="$3"
   if [ -n "${LONGHAUL_NOTIFY_CMD:-}" ]; then
-    # {message} 必须 shell 引用，否则含空格/逗号的消息会把后面的位置参数冲掉（state_dir 错位）。
-    local qmsg; printf -v qmsg '%q' "$msg"
-    local cmd="${LONGHAUL_NOTIFY_CMD//\{event\}/$ev}"; cmd="${cmd//\{state_dir\}/$sd}"
+    # {message}/{state_dir}/{event} 都必须 shell 引用再拼进 `bash -c` 的命令串，否则含空格/逗号的值会
+    # 把后面的位置参数冲掉、含 $()/反引号的值（如项目路径）会被当命令执行（2026-06-23 review：原来只引了
+    # {message}，{state_dir} 含空格的路径会错位、含 $() 的路径可注入）。
+    local qmsg qsd qev
+    printf -v qmsg '%q' "$msg"; printf -v qsd '%q' "$sd"; printf -v qev '%q' "$ev"
+    local cmd="${LONGHAUL_NOTIFY_CMD//\{event\}/$qev}"; cmd="${cmd//\{state_dir\}/$qsd}"
     cmd="${cmd//\{message\}/$qmsg}"
     # 同时给 env，便于自定义通知脚本免占位直接读
     LONGHAUL_NOTIFY_MESSAGE="$msg" LONGHAUL_NOTIFY_EVENT="$ev" LONGHAUL_NOTIFY_STATE_DIR="$sd" bash -c "$cmd" || true
@@ -94,13 +97,16 @@ seen = set(open(seen_path, encoding="utf-8").read().split()) if os.path.exists(s
 pending = {m["id"]: (m.get("flag") or {}) for m in ms if m.get("status") == "NEEDS_CONFIRM"}
 for mid, fl in pending.items():
     if mid not in seen:
-        print("%s\t%s\t%s" % (mid, fl.get("kind", "?"), (fl.get("summary") or "")[:120]))
+        # summary 去掉换行/制表（driver 自由写）——否则 bash 的 `while IFS=$'\t' read` 会把含 \n 的
+        # summary 拆成第二行、多发一条空垃圾通知（2026-06-23 review）。
+        s = (fl.get("summary") or "").replace("\n", " ").replace("\t", " ")[:120]
+        print("%s\t%s\t%s" % (mid, fl.get("kind", "?"), s))
 open(seen_path, "w", encoding="utf-8").write(" ".join(sorted(pending.keys())))
 PY
 )"
   [ -z "$out" ] && return 0
   while IFS=$'\t' read -r fid fkind fsum; do
-    [ -n "$fid" ] && notify flag "🚩 $fid 举旗（$fkind）：$fsum —— 回我「$fid 解决了…」/「$fid 可以继续」/「$fid 回原方案」即可（也可不带 $fid，我自动对上）" "$sd"
+    [ -n "$fid" ] && notify flag "🚩 $fid 举旗（$fkind）：$fsum —— 回我「$fid 解决了…」/「$fid 可以继续」/「$fid 回原方案」即可（也可不带 $fid，我自动对上）。确认前可先 lhb report $fid 看它实际改了啥（举旗步不过门2代码审）" "$sd"
   done <<< "$out"
 }
 
@@ -153,8 +159,16 @@ case "$cmd" in
         *'"state": "blocked"'*) notify blocked "卡住了(熔断)，来看一下" "$SD"; echo "✗ BLOCKED（需要你）"; break;;
         *'"state": "needs_confirm"'*) notify_new_flags "$SD"; notify needs_confirm "其余都跑完了，但有举旗待你确认（resolve/confirm/reject）——回我处理一下" "$SD"; echo "🚩 NEEDS_CONFIRM（等你确认举旗）"; break;;
       esac
-      bash "$ENG/loop.sh" "$SD" >> "$SD/loop.log" 2>&1 || true
+      # 2026-06-23 review：捕获 loop.sh 透传的退出码，别用 `|| true` 吞掉——否则 abort(5)/P0门(6)/
+      # 熔断(3/4) 后 next-json 仍 actionable、循环永远空转、永不通知你。终态码 → 通知 + break。
+      rc=0; bash "$ENG/loop.sh" "$SD" >> "$SD/loop.log" 2>&1 || rc=$?
       notify_new_flags "$SD"   # D 簇：本拍若有 driver 新举旗，立刻播报（不等全部跑完）
+      case "$rc" in
+        5) notify abort   "已人工 abort，循环停止"              "$SD"; echo "✗ ABORTED（人工，via inbox）"; break;;
+        6) notify p0_gate "P0 未确认：停在门口等你 lhb confirm" "$SD"; echo "✗ P0 未确认（需 lhb confirm）"; break;;
+        3) notify blocked "产品熔断（连续失败到上限），来看一下" "$SD"; echo "✗ BLOCKED（产品熔断，需要你）"; break;;
+        4) notify blocked "基建/replan 熔断升级，来看一下"      "$SD"; echo "✗ ESCALATED（基建/replan 熔断，需要你）"; break;;
+      esac
       st="$("$PY" "$ENG/state.py" status "$SD" 2>/dev/null | tr -d ' \n')"
       [ "$st" != "$last" ] && { echo "… $("$PY" "$ENG/state.py" status "$SD" 2>/dev/null | "$PY" -c 'import json,sys;d=json.load(sys.stdin);print(d.get("phase"),d.get("by_status"))' 2>/dev/null)"; last="$st"; }
       [ "$MODE" = "--once" ] && break

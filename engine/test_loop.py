@@ -70,6 +70,7 @@ def _mk_project(seed_milestones):
     with open(msfile, "w", encoding="utf-8") as f:
         json.dump({"milestones": seed_milestones}, f)
     state.cmd_set_milestones(_NS(run_dir=state_dir, file=msfile))
+    state.main(["p0-confirm", state_dir, "--by", "test"])  # set-milestones 后默认未确认，显式放行（P0 门）
     return project, state_dir
 
 

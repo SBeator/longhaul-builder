@@ -403,6 +403,18 @@ def main():
     check("TC24 parse 无裁定 None", "no verdict",
           None, review.parse_verdict("just prose", "impl_review"))
 
+    # ===== TC25 防放水硬化：判官在真实 FAIL 后复述 rubric 格式示例行，不得翻成 PASS =====
+    _echo = ("VERDICT: FAIL\nREASON: 层③把原生降成 iframe，偏离设计\n"
+             "（提醒：按格式输出）\nVERDICT: PASS | PASS_WITH_NITS | FAIL")
+    check("TC25 FAIL后复述格式示例 → 仍判 FAIL（不放水）", "FAIL+示例行",
+          "FAIL", review.parse_verdict(_echo, "impl_review")["verdict"])
+    check("TC25 含 | 的格式示例行单独出现 → 不当裁定(None)", "VERDICT: A|B|C",
+          None, review.parse_verdict("VERDICT: PASS | PASS_WITH_NITS | FAIL", "impl_review"))
+    check("TC25 判官自相矛盾(FAIL+PASS两真实行) → 降级 None", "FAIL\\nPASS",
+          None, review.parse_verdict("VERDICT: FAIL\n...\nVERDICT: PASS", "impl_review"))
+    check("TC25 真实结论在示例行之后(示例在前) → 取真实 FAIL", "示例在前",
+          "FAIL", review.parse_verdict("VERDICT: PASS | FAIL\nVERDICT: FAIL", "impl_review")["verdict"])
+
     # 打印四列证据表
     print("\n用例 | 输入 | 期望 | 实际 | 一致")
     print("--- | --- | --- | --- | ---")

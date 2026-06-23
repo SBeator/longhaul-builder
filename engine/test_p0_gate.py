@@ -121,24 +121,34 @@ def tc2_confirmed_dispatches():
     check("TC2 driver 被调（哨兵存在）", "sentinel", True, os.path.exists(sentinel))
 
 
-def tc3_backward_compat_inbuild():
-    """旧 .longhaul：无 p0_confirmed flag，但已经 set-milestones（phase=build）→ 不被 P0 门挡。"""
+def tc3_setmilestones_requires_confirm():
+    """🔒 set-milestones（=lhb plan）后默认未确认：必须显式 p0-confirm 才放行——堵"plan 把 phase 推到
+    build → 跳过 confirm 直接 run 也能派活"的必停门击穿（2026-06-23 review）。同时验证向后兼容：
+    genuinely 旧的 keyless cursor（phase=build、无 p0_confirmed key）仍隐式放行、不被误挡。"""
     project = tempfile.mkdtemp(prefix="lhb-p0-bc-")
     state_dir = os.path.join(project, ".longhaul")
-    run_state("init", state_dir, "--one-liner", "old run")
+    run_state("init", state_dir, "--one-liner", "fresh run")
     ms_file = os.path.join(project, "ms.json")
     with open(ms_file, "w") as f:
         json.dump({"milestones": _seed_ms()}, f)
-    run_state("set-milestones", state_dir, "--file", ms_file)  # 推 phase→build
-    # 模拟"旧 cursor 无 flag"：set-milestones 不写 p0_confirmed，cursor.phase==build
+    run_state("set-milestones", state_dir, "--file", ms_file)  # 推 phase→build，但默认未确认
     cur = state.load_cursor(state_dir)
-    check("TC3 旧 cursor 确无 p0_confirmed flag", "cursor", False, "p0_confirmed" in cur)
-    check("TC3 is_p0_confirmed 对已进 build 默认 True", "phase=build", True,
+    check("TC3 set-milestones 写显式 p0_confirmed=False", "cursor", False, cur.get("p0_confirmed"))
+    check("TC3 新拆解未确认 → is_p0_confirmed False", "fresh plan", False,
           state.is_p0_confirmed(state_dir))
-    # dry-run tick 不该被 P0 门挡（应进入 dispatch、退 0）
-    code, out = run_loop("tick", state_dir, "--dry-run")
-    check("TC3 旧 build run loop tick 不被 P0 门挡（dry-run 退 0）", "dry-run tick", 0, code)
-    check("TC3 不退 6", "not P0 gate", True, code != loop.P0_GATE_EXIT)
+    code, _ = run_loop("tick", state_dir, "--dry-run")
+    check("TC3 跳过 confirm 直接 tick → 被 P0 门挡（退 6）", "fresh dispatch blocked",
+          loop.P0_GATE_EXIT, code)
+    # 显式 confirm 后放行
+    run_state("p0-confirm", state_dir, "--by", "tester")
+    check("TC3 p0-confirm 后 is_p0_confirmed True", "after confirm", True,
+          state.is_p0_confirmed(state_dir))
+    code2, _ = run_loop("tick", state_dir, "--dry-run")
+    check("TC3 confirm 后 tick 不再被 P0 门挡", "after confirm", True, code2 != loop.P0_GATE_EXIT)
+    # 向后兼容：genuinely 旧 keyless cursor（phase=build、无 p0_confirmed key）仍隐式确认（不破坏已有项目）
+    check("TC3 旧 keyless cursor(phase=build) 仍隐式确认", "backward-compat", True,
+          state.is_p0_confirmed("/nonexistent", milestones=[{"status": "DONE", "phase": "done"}],
+                                cursor={"phase": "build"}))
 
 
 def tc4_is_p0_confirmed_logic():
@@ -175,7 +185,7 @@ def tc5_p0_confirm_idempotent():
 def main():
     tc1_unconfirmed_blocks()
     tc2_confirmed_dispatches()
-    tc3_backward_compat_inbuild()
+    tc3_setmilestones_requires_confirm()
     tc4_is_p0_confirmed_logic()
     tc5_p0_confirm_idempotent()
     npass = sum(1 for r in rows if r[4] == "✅")

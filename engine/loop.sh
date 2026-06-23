@@ -25,6 +25,9 @@ NEXT=$("$PY" "$ENGINE_DIR/loop.py" status "$STATE_DIR" --next-json 2>/dev/null |
 case "$NEXT" in
   *'"state": "done"'*)    echo "[loop.sh] all DONE; nothing to do"; exit 0 ;;
   *'"state": "blocked"'*) echo "[loop.sh] all remaining BLOCKED; escalate"; exit 0 ;;
+  # 2026-06-23 review：全部剩余在等人确认举旗(NEEDS_CONFIRM)→ 停下等 confirm/reject/resolve，
+  # 别空跑（与 done/blocked 一致）。修复"全卡确认门时 cron/while 永远空转、永不停"。
+  *'"state": "needs_confirm"'*) echo "[loop.sh] 全部剩余在等人确认举旗(NEEDS_CONFIRM)；停下等回插"; exit 0 ;;
 esac
 
 # 跑恰好一个 tick。退出码透传（见 loop.py 契约）：0 推进/no-op；2 用法错；3 产品熔断；

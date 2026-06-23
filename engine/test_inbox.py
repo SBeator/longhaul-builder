@@ -77,6 +77,7 @@ def _mk_project(seed_milestones):
     with open(msfile, "w", encoding="utf-8") as f:
         json.dump({"milestones": seed_milestones}, f)
     state.cmd_set_milestones(_NS(run_dir=state_dir, file=msfile))
+    state.main(["p0-confirm", state_dir, "--by", "test"])  # set-milestones 后默认未确认，显式放行（P0 门）
     return project, state_dir
 
 
@@ -168,6 +169,26 @@ def tc1_pause_noops():
           bool(state.load_cursor(sd).get("paused")))
     evs = [e["ev"] for e in _events(sd)]
     check("TC1 记 tick_paused 事件", "审计", True, "tick_paused" in evs)
+
+
+def tc1b_pause_persists_across_ticks():
+    """TC1b（回归）：pause → tick(no-op) → 再 tick（无新消息）必须仍 no-op、相位不前进。
+    修复前 bug：pause 只挡收到 pause 那一拍，第二拍无新消息时会偷偷恢复派活。"""
+    stubs = _copy_fixture_stubs(tempfile.mkdtemp(prefix="lhb-inbox-stubs-"))
+    project, sd = _mk_project([_toy_milestone("T1", "test -f %s/t1_done.txt" % "{project}")])
+    _patch_probe(sd, "T1", "test -f %s/t1_done.txt" % project)
+    driver = "bash %s/stub_driver.sh {mode} {state_dir} {milestone_id} %s" % (stubs, project)
+    judge = "bash %s/stub_judge_pass.sh {prompt_file}" % stubs
+
+    phase0 = state._find(state.load_milestones(sd), "T1")["phase"]
+    _drop(sd, "pause")
+    run_loop("tick", sd, "--driver-cmd", driver, "--judge-cmd", judge)          # 第1拍：消费 pause
+    rc2, _ = run_loop("tick", sd, "--driver-cmd", driver, "--judge-cmd", judge)  # 第2拍：无新消息
+    m = state._find(state.load_milestones(sd), "T1")
+    check("TC1b 第2拍(无新消息)仍 no-op 退 0", "pause→tick→tick", 0, rc2)
+    check("TC1b 第2拍相位仍不前进(没偷偷复跑)", "phase 仍不动", phase0, m["phase"])
+    check("TC1b cursor.paused 仍为 True（持久暂停）", "持久位", True,
+          bool(state.load_cursor(sd).get("paused")))
 
 
 def tc2_resume_proceeds():
@@ -470,6 +491,29 @@ def tc13_redirect_flood_cap():
           True, rc in (0, 4))
 
 
+def tc14_redirect_on_needs_confirm():
+    """TC14（回归）：redirect 打到 NEEDS_CONFIRM 的 milestone → 视同 reject+换方向：回 IN_PROGRESS@plan、
+    带 note、清旗。修复"redirect 被静默吞、永不到 driver"（NEEDS_CONFIRM 永不被 _next_todo 选中）。"""
+    stubs = _copy_fixture_stubs(tempfile.mkdtemp(prefix="lhb-inbox-stubs-"))
+    project, sd = _mk_project([_toy_milestone("T1", "test -f %s/t1_done.txt" % "{project}")])
+    _set_phase(sd, "T1", "NEEDS_CONFIRM", "impl")
+    ms = state.load_milestones(sd)
+    state._find(ms, "T1")["flag"] = {"kind": "blocked-workaround", "summary": "卡住了"}
+    state.save_milestones(sd, ms)
+
+    sig = loop.consume_inbox(sd, _stub_opts(stubs, project)) \
+        if _drop(sd, "redirect", milestone="T1", instruction="改用方案B") else None
+    m = state._find(state.load_milestones(sd), "T1")
+    note_text = json.dumps(m.get("note") or [], ensure_ascii=False)
+    check("TC14 redirect 打 NEEDS_CONFIRM → 回 IN_PROGRESS@plan（不再被吞）", "reopen",
+          True, m["status"] == "IN_PROGRESS" and m["phase"] == "plan")
+    check("TC14 redirect 指示进了 note（→ 会渲染给 driver）", "note", True, "改用方案B" in note_text)
+    check("TC14 清掉了举旗 flag", "flag cleared", True, "flag" not in m)
+    check("TC14 consume 不升级（返回 None）", "no escalate", None, sig)
+    evs = [e["ev"] for e in _events(sd)]
+    check("TC14 记 redirect_on_needs_confirm 事件", "审计", True, "redirect_on_needs_confirm" in evs)
+
+
 def tcP_prompts_redirect_placeholder():
     """TCP：prompts 单测——note→{{redirect}} 渲染出来；无 note 渲染干净（无 UNSET / 无残留占位）。"""
     INSTR = "人工 redirect：改用消息队列"
@@ -501,11 +545,13 @@ def main():
         print("FIXTURE MISSING: %s" % FIXTURE_SRC, file=sys.stderr)
 
     tcs = [tcP_prompts_redirect_placeholder,
-           tc1_pause_noops, tc2_resume_proceeds, tc3_redirect_reopen_review_phase,
+           tc1_pause_noops, tc1b_pause_persists_across_ticks,
+           tc2_resume_proceeds, tc3_redirect_reopen_review_phase,
            tc4_abort_stops, tc5_consumed_once_archived, tc6_malformed_quarantined,
            tc7_ordering, tc8_redirect_done_conservative, tc9_respec_logged,
            tc10_halfwrite_skipped, tc11_redirect_reaches_driver,
-           tc12_redirect_impl_note_fallback, tc13_redirect_flood_cap]
+           tc12_redirect_impl_note_fallback, tc13_redirect_flood_cap,
+           tc14_redirect_on_needs_confirm]
     for tc in tcs:
         try:
             tc()

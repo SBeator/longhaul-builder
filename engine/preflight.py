@@ -16,9 +16,14 @@ import json
 import os
 import sys
 
-#: 前端/UI 强信号（保守，避开 ui/tab/spa 这类易误命中的短子串；中文信号无歧义）。
-UI_SIGNALS = ("前端", "页面", "浏览器", "界面", "网页", "网站", "看板", "渲染", "按钮",
-              "视图", "可视化", "dashboard", "frontend", "browser")
+#: 前端/UI 强信号（保守，仍避开 ui/tab/spa 这类易误命中的短子串；中文信号无歧义）。
+#: 2026-06-23 review 扩词：原表只覆盖少数中文词，react/vue/组件/表单/路由/布局/css/h5 这类
+#: 常见前端术语全漏 → 用这些词描述的纯前端项目照样零 E2E 蒙混过 confirm（ai-cockpit 那个坑会复发）。
+UI_SIGNALS = ("前端", "页面", "网页", "网站", "界面", "浏览器", "看板", "渲染", "按钮",
+              "视图", "可视化", "弹窗", "菜单", "导航", "表单", "组件", "路由", "布局",
+              "样式", "交互", "登录页", "注册页", "活动页", "落地页", "下拉",
+              "dashboard", "frontend", "front-end", "browser", "react", "vue", "svelte",
+              "playwright", "css", "h5")
 E2E_TYPES = ("web-e2e", "e2e")
 
 

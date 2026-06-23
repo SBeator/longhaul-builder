@@ -105,6 +105,39 @@ def main():
     code2, _ = run("claim", d, "M3")  # 已 BLOCKED 再 claim
     check("熔断后 claim 退出码", "claim blocked", 3, code2)
 
+    # ===== P0/P1 review 修复回归 =====
+    # set-milestones 默认写 p0_confirmed=False（P0 门不被 plan→build 击穿）
+    check("set-milestones 后 p0_confirmed=False", "默认未确认", False,
+          state.load_cursor(d).get("p0_confirmed"))
+
+    # 重复 milestone id → 拒绝（exit 2，不静默让第二条永远够不到）
+    d2 = tempfile.mkdtemp(prefix="lhb-dup-")
+    run("init", d2, "--one-liner", "dup test")
+    dupf = os.path.join(d2, "dup.json")
+    with open(dupf, "w") as f:
+        json.dump({"milestones": [{"id": "M1", "goal": "a"}, {"id": "M1", "goal": "b"}]}, f)
+    code_dup, _ = run("set-milestones", d2, "--file", dupf)
+    check("重复 id → set-milestones 退 2（拒绝）", "dup id", 2, code_dup)
+
+    # 缺必填字段 id/goal → 干净用法错（exit 2），不裸 KeyError
+    missf = os.path.join(d2, "miss.json")
+    with open(missf, "w") as f:
+        json.dump({"milestones": [{"goal": "无 id"}]}, f)
+    code_miss, _ = run("set-milestones", d2, "--file", missf)
+    check("缺 id/goal → set-milestones 退 2（非裸 KeyError）", "missing field", 2, code_miss)
+
+    # 损坏 json 状态文件 → 抛清晰 ValueError（不裸 traceback、不静默当默认）
+    d3 = tempfile.mkdtemp(prefix="lhb-corrupt-")
+    run("init", d3, "--one-liner", "corrupt test")
+    with open(os.path.join(d3, "milestones.json"), "w") as f:
+        f.write('{"milestones": [trunc')  # 半截写
+    corrupt_raised = False
+    try:
+        state.load_milestones(d3)
+    except ValueError as e:
+        corrupt_raised = "损坏" in str(e)
+    check("损坏 milestones.json → 抛清晰 ValueError（loud-fail）", "corrupt json", True, corrupt_raised)
+
     # 打印四列证据表
     print("\n用例 | 输入 | 期望 | 实际 | 一致")
     print("--- | --- | --- | --- | ---")

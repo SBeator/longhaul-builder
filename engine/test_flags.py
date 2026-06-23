@@ -71,6 +71,11 @@ def main():
     m1 = {m["id"]: m for m in state.load_milestones(sd3)}["M1"]
     check("confirm → M1 DONE", m1["status"] == "DONE")
     check("confirm 清掉 flag", "flag" not in m1)
+    _ev = [json.loads(l) for l in open(os.path.join(sd3, "events.jsonl"), encoding="utf-8")
+           if l.strip()]
+    _fc = [e for e in _ev if e["ev"] == "flag_confirmed"]
+    check("confirm 审计留痕 gate2_bypassed=True（举旗步未过门2，透明化）",
+          bool(_fc) and _fc[-1].get("gate2_bypassed") is True)
 
     # === reject（场景2驳回）：NEEDS_CONFIRM → 回 plan 重做、push note ===
     sd4 = _fresh([_m("M1", "NEEDS_CONFIRM", "impl"), _m("M2", "TODO", "plan")])

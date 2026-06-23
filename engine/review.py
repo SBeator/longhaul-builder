@@ -61,8 +61,9 @@ PASS_ISH = {
     "plan_review": ("APPROVE", "APPROVE_WITH_CONDITIONS"),
 }
 
-#: VERDICT: 行（rubric 真实输出格式，C1 首选）。大小写不敏感的 verdict 词，全大写归一。
-_VERDICT_LINE_RE = re.compile(r"^\s*VERDICT\s*:\s*([A-Za-z_]+)", re.MULTILINE)
+#: VERDICT: 行（rubric 真实输出格式，C1 首选）。捕获冒号后整行余下内容（含可能的 ` | ` 枚举），
+#: 由 parse_verdict 再判定是不是"真实裁定"还是"格式示例行"。大小写不敏感、全大写归一。
+_VERDICT_LINE_RE = re.compile(r"^\s*VERDICT\s*:\s*([^\n]+)", re.MULTILINE)
 
 #: 脱敏：常见密钥/token 形态打码（judge_cmd 与 raw 落盘/记事件前都过一遍）。
 _SECRET_RES = [
@@ -147,12 +148,25 @@ def parse_verdict(raw_text, kind):
         return None
     whitelist = VALID_VERDICTS.get(kind, ())
 
-    # 1) VERDICT: 块（首选，rubric 真实格式）—— 取最后一个合法的。
-    matches = _VERDICT_LINE_RE.findall(raw_text)
-    for word in reversed(matches):
-        w = word.strip().upper()
+    # 1) VERDICT: 块（首选，rubric 真实格式）。
+    #    🔒 防放水硬化（2026-06-23 review 修）：跳过含 '|' 的「格式示例行」—— rubric 模板自带一行
+    #    `VERDICT: PASS | PASS_WITH_NITS | FAIL` 教判官输出格式，判官常把它复述在真实结论之后；
+    #    旧实现"取最后一个 VERDICT 行"会把示例里的 PASS 当裁定 → 真实 FAIL 被翻成 PASS（放水）。
+    #    再者：若收集到互相矛盾的多个不同裁定（判官自相矛盾）→ 含糊不放行，降级 ERROR（不擅自取乐观的）。
+    verdicts = []
+    for line in _VERDICT_LINE_RE.findall(raw_text):
+        if "|" in line:                       # 枚举/格式示例行，非真实裁定 → 跳过
+            continue
+        m = re.match(r"\s*([A-Za-z_]+)", line)
+        if not m:
+            continue
+        w = m.group(1).upper()
         if w in whitelist:
-            return {"verdict": w, "parsed": None}
+            verdicts.append(w)
+    if verdicts:
+        if len(set(verdicts)) > 1:
+            return None                        # 判官自相矛盾（多个不同裁定）→ 降级，上层判 ERROR
+        return {"verdict": verdicts[-1], "parsed": None}
 
     # 2) JSON fallback —— 剥代码围栏后括号配平抽候选，从后往前试。
     candidates = _iter_json_objects(raw_text)

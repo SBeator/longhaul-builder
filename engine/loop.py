@@ -871,6 +871,23 @@ def _apply_redirect(state_dir, msg, opts):
         state.append_event(state_dir, "redirect_unblock", milestone=mid, id=msg_id)
         return None
 
+    if status == "NEEDS_CONFIRM":
+        # 🔧 redirect 打到"正等你确认举旗"的步 = 不接受举旗、改用这个做法 → 视同 reject+换方向：
+        # 回 plan、带上面已 append 的 redirect note、清旗重做。修复"redirect 被静默吞、永不到 driver"
+        # （NEEDS_CONFIRM 永远不被 _next_todo 选中 → note 渲染不进 prompt）（2026-06-23 review）。
+        m["status"] = "IN_PROGRESS"
+        state._set_phase(m, "plan")
+        m["last_error"] = "人 redirect 覆盖举旗：回原方案带新指示重做"
+        m.pop("flag", None)
+        state.save_milestones(state_dir, ms)
+        cur = _cursor(state_dir)
+        cur["active_milestone"] = mid
+        cur["phase"] = "build"
+        cur["next_action"] = "%s redirect 覆盖举旗，回 plan 带新指示重做" % mid
+        _save_cursor(state_dir, cur)
+        state.append_event(state_dir, "redirect_on_needs_confirm", milestone=mid, id=msg_id)
+        return None
+
     # IN_PROGRESS / TODO：先把 note 落盘（不论后续是否 reopen）。
     state.save_milestones(state_dir, ms)
     if phase in ("plan_review", "impl_review"):
@@ -1010,11 +1027,13 @@ def consume_inbox(state_dir, opts):
         if sig == "escalate":
             ctl = "escalate"
             break                  # redirect 撞软上限：立即止血，本 tick 升级、不再派活
-        if sig == "paused":
-            ctl = "paused"         # 记下但继续消费本批（让同批后续 resume/redirect 也被吸收）
-        elif sig is None and ctl == "paused":
-            ctl = None             # 同批后续的 resume/redirect 撤销前面的 pause（净效果正确，§2.2）
-    return ctl
+        # pause/resume 由 _apply_pause/_apply_resume 直接改 cursor.paused（持久态）；
+        # 最终 paused 信号在循环后按 cursor 派生，不在此累积（见下）。
+    if ctl in ("abort", "escalate"):
+        return ctl
+    # 🔒 paused 是持久态（与 aborted 对称），不是一次性信号：每拍都按 cursor.paused 早退，直到 resume
+    # 清掉。修复"pause 只挡收到 pause 那一拍、下一拍无新消息就偷偷恢复派活"（2026-06-23 review）。
+    return "paused" if _cursor(state_dir).get("paused") else None
 
 
 # ---- inbox 投递口（Layer-1 helper：原子写一个文件，**不消费**）-------------
