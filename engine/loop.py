@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -60,7 +61,8 @@ LEASE_OWNER = "loop-tick"          # 审计用逻辑 owner 名（固定串，非
 
 #: F6 干预 inbox（intervention inbox · AC6 · DESIGN §2.6）。
 INBOX_DIR = "inbox"                       # state_dir/inbox/（人/绑定往这写一文件一消息）
-KINDS = ("pause", "resume", "abort", "redirect", "respec")
+#: D 簇新增 resolve/confirm/reject——人对 driver 举旗(NEEDS_CONFIRM)的异步回插。
+KINDS = ("pause", "resume", "abort", "redirect", "respec", "resolve", "confirm", "reject")
 #: 人工 abort 专用退出码（区别于 infra/replan 升级的 4，让 loop.sh/cron/看板判别"人主动停"）。
 ABORT_EXIT = 5
 
@@ -463,6 +465,92 @@ def resolve_probe(m):
     return pc if (pc and str(pc).strip()) else None
 
 
+# ---- A 簇：impl 改动机器捕获（不信 driver 自写"改了啥"，让 report.py 有真实来源）-------
+
+def _git(proj, *args, timeout=20):
+    """跑一条 git 子命令，返回 (returncode, stdout, stderr)；git 不可用/异常 → (127, "", ...)。"""
+    try:
+        r = subprocess.run(["git", "-C", proj, *args], capture_output=True,
+                           text=True, timeout=timeout)
+        return r.returncode, r.stdout, r.stderr
+    except (OSError, subprocess.SubprocessError) as e:
+        return 127, "", "git unavailable: %s" % e
+
+
+def _capture_changed_files(state_dir, mid, baseline):
+    """impl 结束后**机器捕获**本步改了哪些文件 → evidence/<mid>/changed-files.txt（report.py 读它）。
+
+    用 git diff（相对实施开始时的 baseline），committed/uncommitted 都算。非 git 仓则诚实写明。
+    绝不信 driver 自报"改了啥"——这是 A 簇"报告由证据机器渲染、不靠 agent 自觉"的根。
+    """
+    proj = os.path.dirname(os.path.abspath(state_dir))
+    ev = os.path.join(state_dir, "evidence", mid)
+    out = os.path.join(ev, "changed-files.txt")
+    try:
+        os.makedirs(ev, exist_ok=True)
+    except OSError:
+        return
+    rc0, _o, _e = _git(proj, "rev-parse", "--is-inside-work-tree")
+    if rc0 != 0:
+        try:
+            with open(out, "w", encoding="utf-8") as f:
+                f.write("(项目非 git 仓，无法机器捕获改动文件)\n")
+        except OSError:
+            pass
+        return
+    lines = ["# 本 milestone impl 改动（git 机器捕获，非 driver 自写）", ""]
+    parts = []
+    if baseline:
+        lines.append("## 相对实施开始 %s 的变更（已提交+工作区改动+新增未跟踪）" % baseline[:12])
+        _, names, _ = _git(proj, "diff", "--name-status", baseline)
+        _, stat, _ = _git(proj, "diff", "--stat", baseline)
+        parts.append(names.strip())
+        # git diff 不含未跟踪文件——driver 新建但没 commit 的文件靠这条补上。
+        _, others, _ = _git(proj, "ls-files", "--others", "--exclude-standard")
+        untracked = [ln for ln in others.splitlines() if ln.strip()]
+        if untracked:
+            parts.append("\n".join("A(未跟踪)\t" + u for u in untracked))
+        parts.append(stat.strip())
+    else:
+        lines.append("## 工作区当前变更（无 baseline：实施前仓库无提交）")
+        _, names, _ = _git(proj, "status", "--short")  # status --short 本就含未跟踪(??)
+        parts.append(names.strip())
+    body = "\n".join(p for p in parts if p)
+    lines.append(body or "(无文件改动——driver 可能未改文件，或改动已在 baseline 之前提交)")
+    try:
+        with open(out, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError:
+        return
+    state.append_event(state_dir, "changed_files_captured", milestone=mid,
+                       baseline=(baseline or "")[:12])
+
+
+# ---- D 簇：driver 举旗检测（非阻塞举旗 + 异步确认 + 回插）---------------------
+
+def _detect_and_raise_flag(state_dir, mid):
+    """impl 后检测 driver 留下的 `evidence/<mid>/flag.json`（D 簇举旗：降级/偏离）。
+
+    有则调 state.flag 把该 milestone 标 NEEDS_CONFIRM（非阻塞：cursor 推进到下一个能做的）+ 归档旗子
+    （改名，免得该 milestone 被 resolve 重跑后旧旗重触发）。返回 True = 举了旗（loop 应跳过 impl_review）。
+    """
+    fpath = os.path.join(state_dir, "evidence", mid, "flag.json")
+    if not os.path.isfile(fpath):
+        return False
+    flag = safe_load_json(fpath) or {}
+    kind = flag.get("kind")
+    if kind not in ("blocked-workaround", "spec-divergence"):
+        kind = "spec-divergence"   # kind 不规范也当偏离处理（宁可举旗等人，不放过无声降级）
+    summary = (flag.get("summary") or flag.get("detail") or "")[:300]
+    rc = state.main(["flag", state_dir, mid, "--kind", kind, "--summary", summary])
+    try:
+        stamp = state._now().replace(":", "").replace("-", "")
+        os.rename(fpath, os.path.join(state_dir, "evidence", mid, "flag-consumed-%s.json" % stamp))
+    except OSError:
+        pass
+    return rc == 0
+
+
 # ---- 各相位子例程（每相位做"该相位一件事"，做完调 state 动词，tick 退出）-----
 
 def _driver_ctx(state_dir, mid, mode):
@@ -523,6 +611,10 @@ def _phase_impl(state_dir, m, opts):
     if opts["dry_run"]:
         print("[dry-run] phase=impl → driver(mode=implement) → advance-phase (impl→impl_review)")
         return 0
+    # A 簇：实施前记 git baseline（HEAD），实施后据它机器捕获本步改动文件。
+    _proj = os.path.dirname(os.path.abspath(state_dir))
+    _brc, _bout, _ = _git(_proj, "rev-parse", "HEAD")
+    baseline = _bout.strip() if _brc == 0 and _bout.strip() else None
     (rc, _reason), _ = _timed(state_dir, mid, "impl", "driver",
                               lambda: invoke_driver(opts["driver_cmd"], prompt, state_dir, mid,
                                                     "implement", opts["driver_timeout"]))
@@ -530,6 +622,9 @@ def _phase_impl(state_dir, m, opts):
         return infra_retry(state_dir, mid, "driver(impl) infra: %s" % _reason,
                            opts["max_infra_retries"], "impl")
     _reset_infra(state_dir, mid)
+    _capture_changed_files(state_dir, mid, baseline)  # A 簇：机器捕获"改了哪些文件"
+    if _detect_and_raise_flag(state_dir, mid):        # D 簇：driver 举旗了？
+        return 0  # 已标 NEEDS_CONFIRM + 推进 cursor，跳过 impl_review、非阻塞往后跑、等人确认
     return _run_state(state_dir, "advance-phase", mid, phase="impl")
 
 
@@ -823,12 +918,50 @@ def _apply_respec(state_dir, msg, opts):
     return None
 
 
+# ---- D 簇：人对 driver 举旗(NEEDS_CONFIRM)的异步回插（薄封装，转移逻辑都在 state.py）----
+
+def _apply_resolve(state_dir, msg, opts):
+    """场景1：人已解决 driver 举旗的阻塞 → state.resolve（回 impl 带提示重跑）。"""
+    mid = msg.get("milestone")
+    if not mid:
+        raise ValueError("resolve missing 'milestone'")
+    argv = ["resolve", state_dir, mid]
+    if msg.get("instruction"):
+        argv += ["--instruction", msg["instruction"]]
+    state.main(argv)
+    return None
+
+
+def _apply_confirm(state_dir, msg, opts):
+    """场景2接受：人确认 driver 的偏离方案 OK → state.confirm（→DONE 推进）。"""
+    mid = msg.get("milestone")
+    if not mid:
+        raise ValueError("confirm missing 'milestone'")
+    state.main(["confirm", state_dir, mid])
+    return None
+
+
+def _apply_reject(state_dir, msg, opts):
+    """场景2驳回：人不接受偏离 → state.reject（回 plan 按原方案重做）。"""
+    mid = msg.get("milestone")
+    if not mid:
+        raise ValueError("reject missing 'milestone'")
+    argv = ["reject", state_dir, mid]
+    if msg.get("instruction"):
+        argv += ["--instruction", msg["instruction"]]
+    state.main(argv)
+    return None
+
+
 _APPLY = {
     "pause": _apply_pause,
     "resume": _apply_resume,
     "abort": _apply_abort,
     "redirect": _apply_redirect,
     "respec": _apply_respec,
+    "resolve": _apply_resolve,
+    "confirm": _apply_confirm,
+    "reject": _apply_reject,
 }
 
 
@@ -1089,9 +1222,9 @@ def main(argv=None):
 
     s = sub.add_parser("inbox", help="投递一条干预 inbox 消息（只写文件、不消费；消费在 tick）")
     s.add_argument("state_dir")
-    s.add_argument("kind", choices=KINDS, help="pause|resume|abort|redirect|respec")
-    s.add_argument("--milestone", default=None, help="redirect 的目标 milestone id")
-    s.add_argument("--instruction", default=None, help="redirect/respec 的一句话指示")
+    s.add_argument("kind", choices=KINDS, help="pause|resume|abort|redirect|respec|resolve|confirm|reject")
+    s.add_argument("--milestone", default=None, help="目标 milestone id（redirect/resolve/confirm/reject 用）")
+    s.add_argument("--instruction", default=None, help="一句话指示（redirect/respec/resolve/reject 用）")
     s.add_argument("--force", action="store_true", help="redirect on DONE 时强制退回 plan")
     s.set_defaults(fn=cmd_inbox)
 

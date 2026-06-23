@@ -7,11 +7,13 @@
 #   lhb new   <project-dir> "<一句话需求>"     # git init + 老化出 spec.md 骨架（人/agent 接着填）
 #   lhb plan  <project-dir>                     # spec.md → milestones.json（朴素骨架，按"可独立验收单元"重拆）
 #   lhb agents <project-dir> [--driver claude|codex] [--judge claude|codex]   # 定执行者/审查者(持久化)
-#   lhb confirm <project-dir> [--by 谁]         # ★P0 硬门：确认需求冻结、放行 build
+#   lhb confirm <project-dir> [--by 谁] [--force]  # ★P0 硬门：确认冻结、放行 build（--force 跳过 web 项目的 E2E 门校验）
 #   lhb run   <project-dir> [--once|--watch|--cron]   # 自驱（默认 --watch：while 循环跑到 done/blocked）
 #   lhb status <project-dir>                    # 看进度（哪步/完成几成/有没有 BLOCKED）
 #   lhb timeline <project-dir> [--milestone M]  # 执行流水（每阶段 时间+耗时）
-#   lhb say   <project-dir> <pause|resume|abort|redirect|respec> [--milestone M] [--instruction "..."]
+#   lhb report <project-dir> [--milestone M]    # 进度报告（从证据机器渲染：方案/改了哪些文件/测试/判官/附图/耗时）
+#   lhb say   <project-dir> <pause|resume|abort|redirect|respec|resolve|confirm|reject> [--milestone M] [--instruction "..."]
+#             （resolve/confirm/reject = 人对 driver 举旗(NEEDS_CONFIRM)的回插：已解决/接受偏离/驳回回原方案）
 #
 # 环境变量（可覆盖）：
 #   LONGHAUL_CLAUDE_MODEL   driver/judge 用哪个模型（默认 claude 默认）
@@ -76,6 +78,32 @@ notify(){ # <event> <message> <state_dir>
   fi
 }
 
+# D 簇：每拍后播报「新出现的举旗」（driver 降级/偏离 → NEEDS_CONFIRM）。已播报过的不重发；
+# 举旗被 resolve/confirm/reject 后从已播报集移除，下次再举同名旗会重新播报。
+notify_new_flags(){ # <state_dir>
+  local sd="$1" out fid fkind fsum
+  out="$("$PY" - "$sd" <<'PY'
+import sys, json, os
+sd = sys.argv[1]
+mpath = os.path.join(sd, "milestones.json")
+if not os.path.exists(mpath):
+    sys.exit(0)
+ms = json.load(open(mpath, encoding="utf-8")).get("milestones", [])
+seen_path = os.path.join(sd, ".notified_flags")
+seen = set(open(seen_path, encoding="utf-8").read().split()) if os.path.exists(seen_path) else set()
+pending = {m["id"]: (m.get("flag") or {}) for m in ms if m.get("status") == "NEEDS_CONFIRM"}
+for mid, fl in pending.items():
+    if mid not in seen:
+        print("%s\t%s\t%s" % (mid, fl.get("kind", "?"), (fl.get("summary") or "")[:120]))
+open(seen_path, "w", encoding="utf-8").write(" ".join(sorted(pending.keys())))
+PY
+)"
+  [ -z "$out" ] && return 0
+  while IFS=$'\t' read -r fid fkind fsum; do
+    [ -n "$fid" ] && notify flag "🚩 $fid 举旗（$fkind）：$fsum —— 回我「$fid 解决了…」/「$fid 可以继续」/「$fid 回原方案」即可（也可不带 $fid，我自动对上）" "$sd"
+  done <<< "$out"
+}
+
 cmd="${1:-}"; shift || true
 case "$cmd" in
   new)
@@ -97,8 +125,16 @@ case "$cmd" in
     "$PY" "$ENG/state.py" status "$SD" 2>/dev/null
     ;;
   confirm)
-    PROJ="${1:?usage: lhb confirm <dir>}"; shift || true; SD="$(sd_of "$PROJ")"
-    "$PY" "$ENG/state.py" p0-confirm "$SD" "$@"
+    PROJ="${1:?usage: lhb confirm <dir> [--by 谁] [--force]}"; shift || true; SD="$(sd_of "$PROJ")"
+    FORCE=0; PASS=()
+    for a in "$@"; do case "$a" in --force) FORCE=1;; *) PASS+=("$a");; esac; done
+    # B 簇：放行前的 E2E 兜底校验——web 项目却没 E2E 门就挡住（除非 --force）。
+    if [ "$FORCE" = "1" ]; then
+      echo "（--force：跳过 preflight E2E 校验）"
+    elif ! "$PY" "$ENG/preflight.py" "$SD"; then
+      die "preflight 未过（见上）：web/UI 项目缺真 E2E 验收门。修正 milestones.json（UI milestone 用 acceptance.type=web-e2e + 真浏览器 probe_cmd），或 lhb confirm <dir> --force 明确跳过。"
+    fi
+    "$PY" "$ENG/state.py" p0-confirm "$SD" ${PASS[@]+"${PASS[@]}"}
     echo "✓ P0 已确认，可以 lhb run 起自驱"
     ;;
   run)
@@ -114,9 +150,11 @@ case "$cmd" in
       NEXT="$("$PY" "$ENG/loop.py" status "$SD" --next-json 2>/dev/null || true)"
       case "$NEXT" in
         *'"state": "done"'*)    notify done    "全部 milestone DONE，等你最终验收" "$SD"; echo "✅ DONE（等最终验收）"; break;;
-        *'"state": "blocked"'*) notify blocked "卡住了(熔断/需澄清)，来看一下" "$SD"; echo "✗ BLOCKED（需要你）"; break;;
+        *'"state": "blocked"'*) notify blocked "卡住了(熔断)，来看一下" "$SD"; echo "✗ BLOCKED（需要你）"; break;;
+        *'"state": "needs_confirm"'*) notify_new_flags "$SD"; notify needs_confirm "其余都跑完了，但有举旗待你确认（resolve/confirm/reject）——回我处理一下" "$SD"; echo "🚩 NEEDS_CONFIRM（等你确认举旗）"; break;;
       esac
       bash "$ENG/loop.sh" "$SD" >> "$SD/loop.log" 2>&1 || true
+      notify_new_flags "$SD"   # D 簇：本拍若有 driver 新举旗，立刻播报（不等全部跑完）
       st="$("$PY" "$ENG/state.py" status "$SD" 2>/dev/null | tr -d ' \n')"
       [ "$st" != "$last" ] && { echo "… $("$PY" "$ENG/state.py" status "$SD" 2>/dev/null | "$PY" -c 'import json,sys;d=json.load(sys.stdin);print(d.get("phase"),d.get("by_status"))' 2>/dev/null)"; last="$st"; }
       [ "$MODE" = "--once" ] && break
@@ -126,6 +164,8 @@ case "$cmd" in
   status) "$PY" "$ENG/state.py" status "$(sd_of "${1:?usage: lhb status <dir>}")" ;;
   timeline) PROJ="${1:?usage: lhb timeline <dir> [--milestone M]}"; shift || true
             "$PY" "$ENG/timeline.py" "$(sd_of "$PROJ")" "$@" ;;
+  report) PROJ="${1:?usage: lhb report <dir> [--milestone M] [--images M] [--json]}"; shift || true
+          "$PY" "$ENG/report.py" "$(sd_of "$PROJ")" "$@" ;;
   agents)
     PROJ="${1:?usage: lhb agents <dir> [--driver claude|codex] [--judge claude|codex]}"; shift || true
     DA=claude; JA=claude

@@ -11,8 +11,12 @@ EVENT="${LONGHAUL_NOTIFY_EVENT:-${1:-event}}"
 MESSAGE="${LONGHAUL_NOTIFY_MESSAGE:-${2:-}}"
 SD="${LONGHAUL_NOTIFY_STATE_DIR:-${3:-.}}"
 TEXT="[longhaul:$EVENT] ${MESSAGE}"
+# 可选附图（A 簇）：把 `lhb report --images <M>` 的图片路径放进 $LONGHAUL_NOTIFY_IMAGES（空格分隔），
+# 自定义发送脚本会把它们作为 $TEXT 之后的位置参数收到（如某些 IM CLI 的 `send --images …`）。
+IMAGES="${LONGHAUL_NOTIFY_IMAGES:-}"
 if [ -n "${LONGHAUL_NOTIFY_SHELL:-}" ]; then
-  "$LONGHAUL_NOTIFY_SHELL" "$TEXT" >/dev/null 2>&1 && exit 0
+  # shellcheck disable=SC2086
+  "$LONGHAUL_NOTIFY_SHELL" "$TEXT" $IMAGES >/dev/null 2>&1 && exit 0
 fi
 if [ -n "${LONGHAUL_NOTIFY_WEBHOOK:-}" ]; then
   BODY=$(python3 -c 'import json,sys;print(json.dumps({"text":sys.argv[1]}))' "$TEXT")
