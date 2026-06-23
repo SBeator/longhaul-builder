@@ -1,0 +1,24 @@
+{
+  "milestones": [
+    {
+      "id": "T1",
+      "goal": "造个文件证明 driver 跑过（玩具机械 milestone）",
+      "acceptance": {
+        "type": "integration",
+        "probe": "implement 后 t1_done.txt 应存在",
+        "probe_cmd": "test -f {project}/t1_done.txt"
+      },
+      "max_attempts": 3
+    },
+    {
+      "id": "T2",
+      "goal": "不可满足的 milestone（probe 永 FAIL → 熔断 BLOCKED）",
+      "acceptance": {
+        "type": "integration",
+        "probe": "永远不会满足的探针",
+        "probe_cmd": "test -f /nonexistent/never_xyz.txt"
+      },
+      "max_attempts": 2
+    }
+  ]
+}

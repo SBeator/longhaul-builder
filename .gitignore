@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+runs/
+.DS_Store
+.loop.lock
+.longhaul/.loop.lock
+
+# 构建状态住在每个被建项目自己的 .longhaul/ —— 框架仓本身从不跟踪它
+.longhaul/
+# 自托管 demo 产物（循环跑出来的，可重生成，不入库）
+engine/ROADMAP.md

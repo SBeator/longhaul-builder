@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# lhb — longhaul-builder 的薄入口（绑定层）。把"建项目→老化→规划→P0→自驱→看/插话"收成几条命令，
+# 默认把 driver/judge 接到真 Claude（bindings/claude-*.sh）。这是给 AI agent（或人）用的统一入口，
+# 让"跑这套"不用记一堆 state.py/loop.py 调用。能力层（engine/）保持 agent 无关，本脚本是薄绑定。
+#
+# 用法：
+#   lhb new   <project-dir> "<一句话需求>"     # git init + 老化出 spec.md 骨架（人/agent 接着填）
+#   lhb plan  <project-dir>                     # spec.md → milestones.json（朴素骨架，按"可独立验收单元"重拆）
+#   lhb agents <project-dir> [--driver claude|codex] [--judge claude|codex]   # 定执行者/审查者(持久化)
+#   lhb confirm <project-dir> [--by 谁]         # ★P0 硬门：确认需求冻结、放行 build
+#   lhb run   <project-dir> [--once|--watch|--cron]   # 自驱（默认 --watch：while 循环跑到 done/blocked）
+#   lhb status <project-dir>                    # 看进度（哪步/完成几成/有没有 BLOCKED）
+#   lhb timeline <project-dir> [--milestone M]  # 执行流水（每阶段 时间+耗时）
+#   lhb say   <project-dir> <pause|resume|abort|redirect|respec> [--milestone M] [--instruction "..."]
+#
+# 环境变量（可覆盖）：
+#   LONGHAUL_CLAUDE_MODEL   driver/judge 用哪个模型（默认 claude 默认）
+#   LONGHAUL_DRIVER_CMD / LONGHAUL_JUDGE_CMD   覆盖默认的 claude 绑定（换别的 agent 就改这俩）
+#   LONGHAUL_NOTIFY_CMD     状态变化时调它播报（模板占位 {event}/{message}/{state_dir}）；默认写 notify.log
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")/.." && pwd)"     # framework root
+ENG="$HERE/engine"; BIND="$HERE/bindings"
+PY="${PYTHON:-python3}"
+
+die(){ echo "lhb: $*" >&2; exit 2; }
+sd_of(){ echo "$1/.longhaul"; }
+
+# agent 名(claude/codex) + 角色(driver/judge) → 绑定命令模板。换 agent 只改这里。
+agent_cmd(){ # <role: driver|judge> <agent: claude|codex>
+  case "$1:$2" in
+    driver:claude) echo "bash $BIND/claude-driver.sh {prompt_file} {state_dir} {milestone_id} {mode}";;
+    driver:codex)  echo "bash $BIND/codex-driver.sh {prompt_file} {state_dir} {milestone_id} {mode}";;
+    judge:claude)  echo "bash $BIND/claude-judge.sh {prompt_file} {evidence_dir}";;
+    judge:codex)   echo "bash $BIND/codex-judge.sh {prompt_file} {evidence_dir}";;
+    *) return 1;;
+  esac
+}
+
+# 把角色分配持久化到 <sd>/agents.env（首次定好、之后一直用；lhb run 与 cron 都读它）。
+write_agents(){ # <sd> <driver-agent> <judge-agent>
+  { echo "# longhaul 角色分配——首次定好、整个项目一直用这套（cron 也读它）。"
+    printf "LONGHAUL_DRIVER_CMD='%s'\n" "$(agent_cmd driver "$2")"
+    printf "LONGHAUL_JUDGE_CMD='%s'\n" "$(agent_cmd judge "$3")"
+    echo "# 执行者(driver)=$2 ｜ 审查者(judge)=$3"
+  } > "$1/agents.env"
+}
+
+# run 时：优先用持久化的角色分配；没有再回退默认。
+# 默认 = 执行者 Claude + 审查者 Codex（异构互审）；codex 没装则审查退回 claude，保证最小环境也能跑。
+# 不能用 ${VAR:=默认}——默认值里 {prompt_file} 的 '}' 会提前闭合参数展开、截断模板。
+default_bindings(){
+  if [ -z "${LONGHAUL_DRIVER_CMD:-}" ]; then LONGHAUL_DRIVER_CMD="$(agent_cmd driver claude)"; fi
+  if [ -z "${LONGHAUL_JUDGE_CMD:-}" ]; then
+    if command -v codex >/dev/null 2>&1; then LONGHAUL_JUDGE_CMD="$(agent_cmd judge codex)"
+    else LONGHAUL_JUDGE_CMD="$(agent_cmd judge claude)"; fi
+  fi
+  export LONGHAUL_DRIVER_CMD LONGHAUL_JUDGE_CMD
+}
+load_bindings(){ # <sd>
+  if [ -f "$1/agents.env" ]; then set -a; . "$1/agents.env"; set +a; fi
+  default_bindings
+}
+
+# 状态变化播报（绑定层；默认写文件，可接外部渠道）
+notify(){ # <event> <message> <state_dir>
+  local ev="$1" msg="$2" sd="$3"
+  if [ -n "${LONGHAUL_NOTIFY_CMD:-}" ]; then
+    # {message} 必须 shell 引用，否则含空格/逗号的消息会把后面的位置参数冲掉（state_dir 错位）。
+    local qmsg; printf -v qmsg '%q' "$msg"
+    local cmd="${LONGHAUL_NOTIFY_CMD//\{event\}/$ev}"; cmd="${cmd//\{state_dir\}/$sd}"
+    cmd="${cmd//\{message\}/$qmsg}"
+    # 同时给 env，便于自定义通知脚本免占位直接读
+    LONGHAUL_NOTIFY_MESSAGE="$msg" LONGHAUL_NOTIFY_EVENT="$ev" LONGHAUL_NOTIFY_STATE_DIR="$sd" bash -c "$cmd" || true
+  else
+    echo "[$(date +%FT%T)] $ev: $msg" >> "$sd/notify.log"
+  fi
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  new)
+    PROJ="${1:?usage: lhb new <dir> \"<一句话>\"}"; ONE="${2:?需要一句话需求}"
+    mkdir -p "$PROJ"; ( cd "$PROJ" && [ -d .git ] || git init -q )
+    SD="$(sd_of "$PROJ")"
+    "$PY" "$ENG/state.py" init "$SD" --one-liner "$ONE" >/dev/null
+    "$PY" "$ENG/age.py" skeleton --one-liner "$ONE" -o "$SD/spec.md" >/dev/null 2>&1 \
+      || "$PY" "$ENG/age.py" skeleton --one-liner "$ONE" > "$SD/spec.md" 2>/dev/null || true
+    echo "✓ 建好 $PROJ ，spec 骨架在 $SD/spec.md"
+    echo "  下一步：把 spec.md 的需求/验收标准填清（agent 跟人聊定），再 lhb plan + lhb confirm"
+    ;;
+  plan)
+    PROJ="${1:?usage: lhb plan <dir>}"; SD="$(sd_of "$PROJ")"
+    "$PY" "$ENG/plan.py" "$SD/spec.md" -o "$SD/milestones.json" >/dev/null 2>&1 \
+      || "$PY" "$ENG/plan.py" "$SD/spec.md" > "$SD/milestones.json"
+    "$PY" "$ENG/state.py" set-milestones "$SD" --file "$SD/milestones.json" >/dev/null
+    echo "✓ 拆解写入 $SD/milestones.json （可人审改后再 confirm）"
+    "$PY" "$ENG/state.py" status "$SD" 2>/dev/null
+    ;;
+  confirm)
+    PROJ="${1:?usage: lhb confirm <dir>}"; shift || true; SD="$(sd_of "$PROJ")"
+    "$PY" "$ENG/state.py" p0-confirm "$SD" "$@"
+    echo "✓ P0 已确认，可以 lhb run 起自驱"
+    ;;
+  run)
+    PROJ="${1:?usage: lhb run <dir> [--once|--watch|--cron]}"; MODE="${2:---watch}"; SD="$(sd_of "$PROJ")"
+    load_bindings "$SD"
+    if [ "$MODE" = "--cron" ]; then
+      echo "把这行加进 crontab（每 5 分钟一拍）："
+      echo "  */5 * * * *  LONGHAUL_DRIVER_CMD='$LONGHAUL_DRIVER_CMD' LONGHAUL_JUDGE_CMD='$LONGHAUL_JUDGE_CMD' $HERE/engine/loop.sh $SD >> $SD/loop.log 2>&1"
+      exit 0
+    fi
+    last=""
+    while :; do
+      NEXT="$("$PY" "$ENG/loop.py" status "$SD" --next-json 2>/dev/null || true)"
+      case "$NEXT" in
+        *'"state": "done"'*)    notify done    "全部 milestone DONE，等你最终验收" "$SD"; echo "✅ DONE（等最终验收）"; break;;
+        *'"state": "blocked"'*) notify blocked "卡住了(熔断/需澄清)，来看一下" "$SD"; echo "✗ BLOCKED（需要你）"; break;;
+      esac
+      bash "$ENG/loop.sh" "$SD" >> "$SD/loop.log" 2>&1 || true
+      st="$("$PY" "$ENG/state.py" status "$SD" 2>/dev/null | tr -d ' \n')"
+      [ "$st" != "$last" ] && { echo "… $("$PY" "$ENG/state.py" status "$SD" 2>/dev/null | "$PY" -c 'import json,sys;d=json.load(sys.stdin);print(d.get("phase"),d.get("by_status"))' 2>/dev/null)"; last="$st"; }
+      [ "$MODE" = "--once" ] && break
+      sleep "${LONGHAUL_TICK_SLEEP:-5}"
+    done
+    ;;
+  status) "$PY" "$ENG/state.py" status "$(sd_of "${1:?usage: lhb status <dir>}")" ;;
+  timeline) PROJ="${1:?usage: lhb timeline <dir> [--milestone M]}"; shift || true
+            "$PY" "$ENG/timeline.py" "$(sd_of "$PROJ")" "$@" ;;
+  agents)
+    PROJ="${1:?usage: lhb agents <dir> [--driver claude|codex] [--judge claude|codex]}"; shift || true
+    DA=claude; JA=claude
+    while [ $# -gt 0 ]; do case "$1" in
+      --driver) DA="${2:?}"; shift 2;; --judge) JA="${2:?}"; shift 2;; *) shift;; esac; done
+    agent_cmd driver "$DA" >/dev/null || die "未知 driver agent '$DA'（只支持 claude|codex）"
+    agent_cmd judge  "$JA" >/dev/null || die "未知 judge agent '$JA'（只支持 claude|codex）"
+    write_agents "$(sd_of "$PROJ")" "$DA" "$JA"
+    echo "✓ 角色已定：执行者(driver)=$DA ｜ 审查者(judge)=$JA"
+    echo "  写入 $(sd_of "$PROJ")/agents.env，整个项目（含 cron）之后一直用这套。" ;;
+  say)
+    PROJ="${1:?usage: lhb say <dir> <kind> ...}"; shift; KIND="${1:?kind}"; shift || true
+    "$PY" "$ENG/loop.py" inbox "$(sd_of "$PROJ")" "$KIND" "$@"
+    ;;
+  ""|-h|--help|help)
+    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "未知命令 '$cmd'（试 lhb help）" ;;
+esac
