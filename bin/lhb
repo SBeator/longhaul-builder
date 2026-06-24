@@ -188,7 +188,7 @@ case "$cmd" in
     while :; do
       NEXT="$("$PY" "$ENG/loop.py" status "$SD" --next-json 2>/dev/null || true)"
       case "$NEXT" in
-        *'"state": "done"'*)    notify_progress "$SD"; notify done "全部 milestone DONE，等你最终验收" "$SD"; echo "✅ DONE（等最终验收）"; break;;
+        *'"state": "done"'*)    notify_progress "$SD"; bash "$0" report-doc "$PROJ" >/dev/null 2>&1 || true; notify done "全部 milestone DONE，等你最终验收（运行报告已生成进 docs/iterations/）" "$SD"; echo "✅ DONE（等最终验收 ｜ 运行报告见 docs/iterations/）"; break;;
         *'"state": "blocked"'*) notify blocked "卡住了(熔断)，来看一下" "$SD"; echo "✗ BLOCKED（需要你）"; break;;
         *'"state": "needs_confirm"'*) notify_new_flags "$SD"; notify needs_confirm "其余都跑完了，但有举旗待你确认（resolve/confirm/reject）——回我处理一下" "$SD"; echo "🚩 NEEDS_CONFIRM（等你确认举旗）"; break;;
       esac
@@ -219,6 +219,19 @@ case "$cmd" in
             "$PY" "$ENG/timeline.py" "$(sd_of "$PROJ")" "$@" ;;
   report) PROJ="${1:?usage: lhb report <dir> [--milestone M] [--images M] [--json]}"; shift || true
           "$PY" "$ENG/report.py" "$(sd_of "$PROJ")" "$@" ;;
+  report-doc)
+    # item10 运行报告能力：从证据产 md + html → 写进可见的 docs/iterations/ + 追加索引；装了 lark-cli 就发飞书。
+    PROJ="${1:?usage: lhb report-doc <dir>}"; SD="$(sd_of "$PROJ")"
+    STAMP="$(date +%Y-%m-%d-%H%M)"
+    IT="$PROJ/docs/iterations"; mkdir -p "$IT"
+    ONE="$(grep -m1 '^# ' "$SD/spec.md" 2>/dev/null | sed 's/^# //' || true)"; ONE="${ONE:-longhaul build}"
+    "$PY" "$ENG/reportdoc.py" "$SD" --stamp "$STAMP" > "$IT/$STAMP.md" 2>/dev/null || { die "产报告失败"; }
+    "$PY" "$ENG/reportdoc.py" "$SD" --stamp "$STAMP" --format html > "$IT/$STAMP.html" 2>/dev/null || true
+    printf -- '- %s · %s · [报告](%s.md) / [html](%s.html)\n' "$STAMP" "$ONE" "$STAMP" "$STAMP" >> "$IT/README.md"
+    echo "✓ 运行报告：$IT/$STAMP.md ｜ $IT/$STAMP.html ｜ 已追加 docs/iterations/README.md"
+    URL="$(bash "$BIND/publish-feishu.sh" "$IT/$STAMP.md" "运行报告 $STAMP — $ONE" 2>/dev/null | grep -E '^https://' | head -1 || true)"
+    [ -n "$URL" ] && echo "  飞书文档：$URL"
+    ;;
   agents)
     PROJ="${1:?usage: lhb agents <dir> [--driver claude|codex] [--judge claude|codex]}"; shift || true
     DA=claude; JA=claude
