@@ -65,26 +65,36 @@ def _clip(s, n=40):
     return s if len(s) <= n else s[:n] + "…"
 
 
-def _did(goal, limit=86):
-    """「做了什么」＝总结这步的修改内容（不只标题、也不堆全文）。
-
-    milestone 的 goal 多是「标题：组件 + 组件 + …」。做法：去掉技术噪声（#选择器/[属性]/.类名/
-    残留标点），保留 goal 自身可读的「标题：组件」结构，在自然断点处收尾（超长加「等」）——
-    既说清改了啥、又不超长、不留半个词的 … 截断。"""
-    g = (goal or "").replace("\n", " ").strip()
+def _clean_sum(s, limit=80):
+    """清洗 + 边界收尾：去技术噪声（#选择器/[属性]/.类名/残留标点），超长在自然断点加「等」（不用 …）。"""
+    g = (s or "").replace("\n", " ").strip()
     g = re.sub(r"#[\w-]+", "", g)                      # #选择器
     g = re.sub(r"\[[^\]]*\]", "", g)                   # [data-attr]
+    g = re.sub(r"<[^>]*>", "", g)                      # <key> 等占位符
     g = re.sub(r"\.[a-zA-Z][\w-]*", "", g)             # .类名 / .html
-    g = re.sub(r"[（(]\s*[+、，,/；;]+\s*", "（", g)       # 去括号开头被删选择器留下的残标点
+    g = re.sub(r"[（(][\s+、，,/；;]+", "（", g)           # 去括号开头被删选择器留下的残标点（含空格）
     g = re.sub(r"\s+([）)])", r"\1", g)
-    g = re.sub(r"\s+", " ", g)
-    g = re.sub(r"：\s+", "：", g).strip()
+    g = re.sub(r"\s+", " ", g).strip(" 、，,；;")
     if len(g) <= limit:
         return g
     head = g[:limit]
     brk = set("+、。；/ ")
     cut = max((i for i in range(len(head) - 1, int(limit * 0.5), -1) if head[i] in brk), default=limit)
     return head[:cut].rstrip(" +、。；/") + " 等"
+
+
+def _did_title(goal):
+    """第一列「做了什么」＝最简单介绍：goal 冒号前的标题。无冒号就取短摘要。"""
+    g = (goal or "").replace("\n", " ").strip()
+    ps = [g.find(s) for s in ("：", ":") if g.find(s) > 0]
+    return g[:min(ps)].strip() if ps else _clean_sum(g, 22)
+
+
+def _did_detail(goal):
+    """第二列「详情」＝冒号后的修改内容摘要（清洗 + 边界收尾）。无冒号则空。"""
+    g = (goal or "").replace("\n", " ").strip()
+    ps = [g.find(s) for s in ("：", ":") if g.find(s) > 0]
+    return _clean_sum(g[min(ps) + 1:]) if ps else ""
 
 
 def _signals(state_dir):
@@ -125,10 +135,11 @@ def build_progress_table(state_dir):
     s = _signals(state_dir)
     rows, ms = s["rows"], s["ms"]
     by = {r["mid"]: r for r in rows}
-    out = ["| 步 | 做了什么 | 状态 | 出方案/实现/审 | 备注 |", "|---|---|---|---|---|"]
+    out = ["| 步 | 做了什么 | 详情 | 状态 | 出方案/实现/审 | 备注 |", "|---|---|---|---|---|---|"]
     for m in ms:
         mid = m.get("id")
         r = by.get(mid, {})
+        goal = m.get("goal", "")
         st = PHASE_STATUS_CN.get(m.get("status"), m.get("status") or "")
         if r.get("n_drv"):
             timing = "%s分(%d次) / %s分" % (r.get("drv_min", 0), r.get("n_drv", 0), r.get("rev_min", 0))
@@ -143,8 +154,8 @@ def build_progress_table(state_dir):
             note = "·".join("%s×%d" % (k, v) for k, v in kinds.items())
         else:
             note = "顺利" if m.get("status") == "DONE" else ""
-        out.append("| `%s` | %s | %s | %s | %s |" % (
-            mid, _did(m.get("goal", "")), st, timing, note))
+        out.append("| `%s` | %s | %s | %s | %s | %s |" % (
+            mid, _did_title(goal), _did_detail(goal), st, timing, note))
     return "\n".join(out)
 
 
