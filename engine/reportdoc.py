@@ -25,7 +25,11 @@ def _one_liner(state_dir):
     if os.path.exists(sp):
         for line in open(sp, encoding="utf-8"):
             if line.startswith("# "):
-                return line[2:].strip()
+                t = line[2:].strip()
+                for pre in ("spec — ", "spec—", "spec - ", "spec: ", "spec："):   # 去 spec 骨架前缀，标题更干净
+                    if t.startswith(pre):
+                        return t[len(pre):].strip()
+                return t
     return "longhaul build"
 
 

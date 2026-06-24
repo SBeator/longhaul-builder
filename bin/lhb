@@ -224,7 +224,7 @@ case "$cmd" in
     PROJ="${1:?usage: lhb report-doc <dir>}"; SD="$(sd_of "$PROJ")"
     STAMP="$(date +%Y-%m-%d-%H%M)"
     IT="$PROJ/docs/iterations"; mkdir -p "$IT"
-    ONE="$(grep -m1 '^# ' "$SD/spec.md" 2>/dev/null | sed 's/^# //' || true)"; ONE="${ONE:-longhaul build}"
+    ONE="$("$PY" -c 'import sys;sys.path.insert(0,sys.argv[1]);import reportdoc;print(reportdoc._one_liner(sys.argv[2]))' "$ENG" "$SD" 2>/dev/null || true)"; ONE="${ONE:-longhaul build}"
     "$PY" "$ENG/reportdoc.py" "$SD" --stamp "$STAMP" > "$IT/$STAMP.md" 2>/dev/null || { die "产报告失败"; }
     "$PY" "$ENG/reportdoc.py" "$SD" --stamp "$STAMP" --format html > "$IT/$STAMP.html" 2>/dev/null || true
     printf -- '- %s · %s · [报告](%s.md) / [html](%s.html)\n' "$STAMP" "$ONE" "$STAMP" "$STAMP" >> "$IT/README.md"

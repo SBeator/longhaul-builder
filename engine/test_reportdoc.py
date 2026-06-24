@@ -60,6 +60,11 @@ def main():
     check("html 代码块渲成 <pre>", "<pre>" in html)
     check("html 转义了 < >（无裸 <script 注入）", "<script" not in md or "&lt;script" in html or True)
 
+    # _one_liner 去 spec 骨架前缀（报告标题更干净，不要"运行报告 — spec — X"）
+    d2 = tempfile.mkdtemp(prefix="lhb-one-")
+    open(os.path.join(d2, "spec.md"), "w", encoding="utf-8").write("# spec — 干净标题测试\n\n正文\n")
+    check("_one_liner 去掉 'spec — ' 前缀", reportdoc._one_liner(d2) == "干净标题测试")
+
     npass = sum(1 for r in _rows if r)
     print("\n运行报告能力：%d/%d 绿" % (npass, len(_rows)))
     return 0 if npass == len(_rows) else 1
