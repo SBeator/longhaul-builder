@@ -228,8 +228,9 @@ case "$cmd" in
     STAMP="$(date +%Y-%m-%d-%H%M)"
     DIR="$("$PY" "$ENG/iterations.py" archive "$PROJ" --state-dir "$SD" --stamp "$STAMP" 2>/dev/null)" || { die "归档失败"; }
     [ -n "$DIR" ] || die "归档失败（无目录名）"
-    MD="$PROJ/docs/iterations/$DIR/report.md"
-    URL="$(bash "$BIND/publish-feishu.sh" "$MD" "$SD" 2>/dev/null | grep -E '^https://' | head -1 || true)"
+    # 已发布过就拿已有 token → 原地更新同一篇飞书（不每次新建，链接稳定）；否则新建。
+    TOK="$("$PY" "$ENG/iterations.py" feishu-token "$PROJ" --state-dir "$SD" 2>/dev/null || true)"
+    URL="$(bash "$BIND/publish-feishu.sh" "$SD" "$TOK" 2>/dev/null | grep -E '^https://' | head -1 || true)"
     [ -n "$URL" ] && { "$PY" "$ENG/iterations.py" set-feishu "$PROJ" "$URL" --state-dir "$SD" >/dev/null 2>&1 || true; }
     echo "✓ 已归档迭代 docs/iterations/$DIR/（report.md/html + state/ + meta）｜ INDEX 已重建${URL:+ ｜ 飞书 $URL}"
     ;;

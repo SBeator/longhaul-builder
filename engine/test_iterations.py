@@ -72,6 +72,7 @@ def main():
     iterations.set_feishu(proj, sd, "https://x.larkoffice.com/docx/ABC123")
     idx2 = open(os.path.join(itd, "INDEX.md"), encoding="utf-8").read()
     check("set_feishu 回填进 INDEX", "ABC123" in idx2 and "[飞书]" in idx2)
+    check("set_feishu 存了 token(供下次原地更新同一篇)", iterations.feishu_token(sd) == "ABC123")
 
     # 第二轮迭代：序号递增到 02
     # 模拟新一轮：清掉 iteration marker（像开了新构建）

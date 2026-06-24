@@ -205,8 +205,8 @@ def build_retro(state_dir):
     return "\n".join(out)
 
 
-def build_md(state_dir, stamp=""):
-    """完整运行报告（markdown，四段式）。"""
+def build_md(state_dir, stamp="", feishu=False):
+    """完整运行报告（markdown，四段式）。feishu=True 出飞书版（耗时段指向文末妙笔甘特、去掉本地占位/details）。"""
     one = _one_liner(state_dir)
     s = _signals(state_dir)
     out = ["# 运行报告 — %s" % one, ""]
@@ -222,10 +222,13 @@ def build_md(state_dir, stamp=""):
 
     out += ["## 2 · 阶段性进展", "", build_progress_table(state_dir), ""]
 
-    out += ["## 3 · 耗时", "",
-            "下图为本轮**交互甘特**（每步出方案/实现/审/超时/返工，hover 看详情）；md 阅读器看不到交互图时，见下方文字时间线。",
-            "", _GANTT_MARK, "",
-            "<details><summary>文字时间线（兜底）</summary>", "", "```", timeline.render(state_dir), "```", "", "</details>", ""]
+    out += ["## 3 · 耗时", ""]
+    if feishu:
+        out += ["本轮**交互甘特**见本文档**末尾的互动图**（每步出方案/实现/审/超时/返工，hover 看详情、可横向缩放）。", ""]
+    else:
+        out += ["下图为本轮**交互甘特**（每步出方案/实现/审/超时/返工，hover 看详情）；md 阅读器看不到交互图时，见下方文字时间线。",
+                "", _GANTT_MARK, "",
+                "<details><summary>文字时间线（兜底）</summary>", "", "```", timeline.render(state_dir), "```", "", "</details>", ""]
 
     out += [build_retro(state_dir)]
 
@@ -345,8 +348,10 @@ def main(argv=None):
     ap.add_argument("state_dir")
     ap.add_argument("--stamp", default="")
     ap.add_argument("--format", choices=("md", "html"), default="md")
+    ap.add_argument("--flavor", choices=("local", "feishu"), default="local",
+                    help="feishu：正文耗时段指向文末妙笔甘特、去掉本地占位/details")
     a = ap.parse_args(argv)
-    md = build_md(a.state_dir, a.stamp)
+    md = build_md(a.state_dir, a.stamp, feishu=(a.flavor == "feishu"))
     sys.stdout.write(build_html(md, "运行报告", a.state_dir) if a.format == "html" else md)
     return 0
 

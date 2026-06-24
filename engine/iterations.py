@@ -138,11 +138,21 @@ def archive(project, state_dir, stamp="", date=None, slug=None):
     return {"dir": dirname, "folder": folder, "md": os.path.join(folder, "report.md"), "meta": meta}
 
 
+def _token_from_url(url):
+    return url.rstrip("/").split("/")[-1].split("?")[0] if url else ""
+
+
+def feishu_token(state_dir):
+    """这条迭代已发布过的飞书文档 token（给 update-in-place 用；没发过返空）。"""
+    return _read_marker(state_dir).get("feishu_token", "")
+
+
 def set_feishu(project, state_dir, url):
-    """归档后拿到飞书 URL 再回填进 meta + marker + 重建 INDEX。"""
+    """归档后拿到飞书 URL 再回填进 meta + marker + 重建 INDEX；同时记 token（供下次原地更新同一篇）。"""
     if not url:
         return
-    _write_marker(state_dir, feishu_url=url)
+    tok = _token_from_url(url)
+    _write_marker(state_dir, feishu_url=url, feishu_token=tok)
     marker = _read_marker(state_dir)
     dirname = marker.get("iteration_dir")
     if not dirname:
@@ -151,6 +161,7 @@ def set_feishu(project, state_dir, url):
     if os.path.exists(mp):
         m = json.load(open(mp, encoding="utf-8"))
         m["feishu_url"] = url
+        m["feishu_token"] = tok
         json.dump(m, open(mp, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     build_index(project)
 
@@ -235,6 +246,9 @@ def main(argv=None):
     f.add_argument("--state-dir", default=None)
     ix = sub.add_parser("index", help="只重建 INDEX.md")
     ix.add_argument("project")
+    tk = sub.add_parser("feishu-token", help="打印这条迭代已发布的飞书 token（没发过则空）")
+    tk.add_argument("project")
+    tk.add_argument("--state-dir", default=None)
     args = ap.parse_args(argv)
     sd = getattr(args, "state_dir", None) or os.path.join(args.project, ".longhaul")
     if args.cmd == "archive":
@@ -244,6 +258,8 @@ def main(argv=None):
         set_feishu(args.project, sd, args.url)
     elif args.cmd == "index":
         build_index(args.project)
+    elif args.cmd == "feishu-token":
+        print(feishu_token(sd))
     return 0
 
 

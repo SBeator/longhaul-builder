@@ -77,6 +77,12 @@ def main():
     check("html 加粗渲成 <strong>", "<strong>" in html)
     check("无 state_dir 时占位符被安全丢弃(不留裸标记)", reportdoc._GANTT_MARK not in reportdoc.build_html(md, "x"))
 
+    # 飞书 flavor：耗时段指向文末妙笔甘特、去掉本地占位/details（飞书里甘特是独立 HTML Box）
+    fmd = reportdoc.build_md(sd, "2026-06-24", feishu=True)
+    check("飞书 flavor 去掉 GANTT 占位 + details", reportdoc._GANTT_MARK not in fmd and "<details>" not in fmd)
+    check("飞书 flavor 耗时段指向文末甘特", "末尾的互动图" in fmd and "## 3 · 耗时" in fmd)
+    check("飞书 flavor 仍保留四段+表格+复盘", "1 · 背景" in fmd and "| 步 |" in fmd and "4a · 框架流程" in fmd and "4b · 项目本身" in fmd)
+
     # _one_liner 去 spec 骨架前缀
     d2 = tempfile.mkdtemp(prefix="lhb-one-")
     open(os.path.join(d2, "spec.md"), "w", encoding="utf-8").write("# spec — 干净标题测试\n\n正文\n")
