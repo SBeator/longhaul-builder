@@ -110,6 +110,34 @@ PY
   done <<< "$out"
 }
 
+# item 7 进度播报带时间：每个 milestone 完成时播报「本步耗时(分阶段) + 累计 + 当前时间」，修"进度更新不带时间"。
+# 已播报过的 milestone 记进 .notified_done，不重发。
+notify_progress(){ # <state_dir>
+  local sd="$1" line out
+  out="$("$PY" - "$sd" "$ENG" <<'PY'
+import sys, json, os
+sd, eng = sys.argv[1], sys.argv[2]
+sys.path.insert(0, eng)
+import timeline
+mpath = os.path.join(sd, "milestones.json")
+if not os.path.exists(mpath):
+    sys.exit(0)
+ms = json.load(open(mpath, encoding="utf-8")).get("milestones", [])
+seen_path = os.path.join(sd, ".notified_done")
+seen = set(open(seen_path, encoding="utf-8").read().split()) if os.path.exists(seen_path) else set()
+done = [m["id"] for m in ms if m.get("status") == "DONE"]
+for mid in done:
+    if mid not in seen:
+        print(timeline.progress_line(sd, mid).replace("\n", " "))
+open(seen_path, "w", encoding="utf-8").write(" ".join(done))
+PY
+)"
+  [ -z "$out" ] && return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] && notify progress "$line" "$sd"
+  done <<< "$out"
+}
+
 cmd="${1:-}"; shift || true
 case "$cmd" in
   new)
@@ -155,7 +183,7 @@ case "$cmd" in
     while :; do
       NEXT="$("$PY" "$ENG/loop.py" status "$SD" --next-json 2>/dev/null || true)"
       case "$NEXT" in
-        *'"state": "done"'*)    notify done    "全部 milestone DONE，等你最终验收" "$SD"; echo "✅ DONE（等最终验收）"; break;;
+        *'"state": "done"'*)    notify_progress "$SD"; notify done "全部 milestone DONE，等你最终验收" "$SD"; echo "✅ DONE（等最终验收）"; break;;
         *'"state": "blocked"'*) notify blocked "卡住了(熔断)，来看一下" "$SD"; echo "✗ BLOCKED（需要你）"; break;;
         *'"state": "needs_confirm"'*) notify_new_flags "$SD"; notify needs_confirm "其余都跑完了，但有举旗待你确认（resolve/confirm/reject）——回我处理一下" "$SD"; echo "🚩 NEEDS_CONFIRM（等你确认举旗）"; break;;
       esac
@@ -163,6 +191,7 @@ case "$cmd" in
       # 熔断(3/4) 后 next-json 仍 actionable、循环永远空转、永不通知你。终态码 → 通知 + break。
       rc=0; bash "$ENG/loop.sh" "$SD" >> "$SD/loop.log" 2>&1 || rc=$?
       notify_new_flags "$SD"   # D 簇：本拍若有 driver 新举旗，立刻播报（不等全部跑完）
+      notify_progress "$SD"    # item7：本拍若有 milestone 完成，带时间播报（本步耗时+累计+当前）
       case "$rc" in
         0) : ;;   # 推进 / no-op / paused / flock 跳过：继续下一拍
         5) notify abort   "已人工 abort，循环停止"              "$SD"; echo "✗ ABORTED（人工，via inbox）"; break;;

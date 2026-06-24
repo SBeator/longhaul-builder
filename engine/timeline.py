@@ -92,6 +92,42 @@ def render(state_dir, only=None):
     return "\n".join(lines)
 
 
+def progress_line(state_dir, mid):
+    """item 7 进度播报带时间：一行「<mid> 完成 ｜ 本步耗时(分阶段) ｜ 累计 ｜ 当前时间」。
+
+    给 bin/lhb 的 notify_progress 用——每个 milestone 完成时播报，让人跑着就看见"哪步多久/到现在多久"，
+    不用事后扒 events.jsonl（修最初的"进度更新不带时间"bug，2026-06-24）。
+    """
+    import datetime
+    d = build(state_dir, only=mid)
+    rs = d["per_milestone"].get(mid, [])
+    plan = sum(r["duration_ms"] for r in rs if r["step"] == "driver" and r["phase"] == "plan")
+    impl = sum(r["duration_ms"] for r in rs if r["step"] == "driver" and r["phase"] == "impl")
+    review = sum(r["duration_ms"] for r in rs if r["step"] == "review")
+    step_total = sum(r["duration_ms"] for r in rs)
+    cumulative = "?"
+    full = build(state_dir)   # 全量：累计＝init→现在的墙钟
+    if full["init"]:
+        try:
+            t0 = datetime.datetime.strptime(full["init"][:19], "%Y-%m-%dT%H:%M:%S")
+            secs = int((datetime.datetime.utcnow() - t0).total_seconds())
+            h, mm = secs // 3600, (secs % 3600) // 60
+            cumulative = "%dh%02dm" % (h, mm) if h else "%dm" % mm   # 累计可达数小时，用时分制更直观
+        except Exception:
+            pass
+    now_local = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%H:%M")
+    parts = []
+    if plan:
+        parts.append("出方案 " + _fmt(plan))
+    if impl:
+        parts.append("实现 " + _fmt(impl))
+    if review:
+        parts.append("审 " + _fmt(review))
+    breakdown = "（" + " · ".join(parts) + "）" if parts else ""
+    return "✅ %s 完成 ｜ 本步 %s%s ｜ 累计 %s ｜ %s" % (
+        mid, _fmt(step_total), breakdown, cumulative, now_local)
+
+
 def _window(a, b):
     # 粗略：用 HH:MM:SS 差（同日）；跨日就返回 0。纯标准库不引 datetime 解析 Z。
     try:
