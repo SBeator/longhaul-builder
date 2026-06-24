@@ -136,9 +136,15 @@ def main():
     run("advance-phase", d2, "B1")               # plan→plan_review
     run("gate-pass", d2, "B1", "--gate", "plan")  # →impl, A==1
     run("advance-phase", d2, "B1")               # impl→impl_review
-    code_cb, _, _ = run("gate-fail", d2, "B1", "--gate", "impl", "--error", "死结")  # →impl A==2 达上限熔断
+    code_sr, _, _ = run("gate-fail", d2, "B1", "--gate", "impl", "--error", "死结")  # A==2 撞上限 → 先自救一次（item5）
     m = _m(d2, "B1")
-    check("TC9 熔断 status BLOCKED", "gate-fail 到上限", "BLOCKED", m["status"])
+    check("TC9 撞上限先自救（退 0、不直接熔断）", "gate-fail 到上限", 0, code_sr)
+    check("TC9 自救留 IN_PROGRESS@impl", "self-recovery", "IN_PROGRESS", m["status"])
+    check("TC9 自救标记 self_recovery_used", "self-recovery", True, m.get("self_recovery_used"))
+    run("advance-phase", d2, "B1")               # impl→impl_review（自救重试也失败）
+    code_cb, _, _ = run("gate-fail", d2, "B1", "--gate", "impl", "--error", "自救也失败")  # 再撞上限 → 真熔断
+    m = _m(d2, "B1")
+    check("TC9 自救后再失败 → BLOCKED", "gate-fail 到上限", "BLOCKED", m["status"])
     check("TC9 熔断 phase blocked", "gate-fail 到上限", "blocked", m.get("phase"))
     check("TC9 熔断退出码 3", "gate-fail 到上限", 3, code_cb)
 
@@ -200,10 +206,14 @@ def main():
     run("claim", d6, "C1")
     run("fail", d6, "C1", "--error", "死结1")        # A==1
     run("claim", d6, "C1")                            # 幂等
-    code_f, _, _ = run("fail", d6, "C1", "--error", "死结2")  # A==2 达上限熔断
+    run("fail", d6, "C1", "--error", "死结2")        # A==2 撞上限 → 先自救一次（item5，不熔断）
     m = _m(d6, "C1")
-    check("TC14 旧熔断 status BLOCKED", "claim→fail×2", "BLOCKED", m["status"])
-    check("TC14 旧熔断退出码 3", "claim→fail×2", 3, code_f)
+    check("TC14 撞上限先自救（不直接熔断）", "claim→fail×2", "IN_PROGRESS", m["status"])
+    run("claim", d6, "C1")
+    code_f, _, _ = run("fail", d6, "C1", "--error", "死结3")  # 自救后再撞 → 真熔断
+    m = _m(d6, "C1")
+    check("TC14 自救后再失败 BLOCKED", "claim→fail×3", "BLOCKED", m["status"])
+    check("TC14 自救后熔断退出码 3", "claim→fail×3", 3, code_f)
 
     # ---------- TC15 非法相位转移干净报错（退出码 2）----------
     d7 = tempfile.mkdtemp(prefix="lhb-illegal-")

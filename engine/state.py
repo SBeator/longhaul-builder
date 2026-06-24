@@ -183,9 +183,24 @@ def _enter_impl(run_dir: str, milestones: list, m: dict) -> int:
     返回 0 = 正常进入 impl；3 = 熔断。
     """
     m["attempt_count"] += 1
-    if m["attempt_count"] >= m["max_attempts"]:
-        # 走到上限：这次进入 impl 即耗尽，直接熔断（不真正停在 impl）。
-        return _block(run_dir, milestones, m, m.get("last_error") or "超 max_attempts")
+    over = m["attempt_count"] >= m["max_attempts"]
+    # item5 熔断前先自救一次（2026-06-24）：第一次撞上限不直接 BLOCKED，而是给一次"换个根本不同
+    # approach"的实施机会（推强提示 note → driver 下次实施换路子；如方案本身错了它可据此举旗）。
+    # 自救也失败（再撞上限）才真熔断升级人工——减少"撞熔断就硬停等人 redirect"的人工阻塞。
+    if over and not m.get("self_recovery_used") and m["attempt_count"] > 1:
+        m["self_recovery_used"] = True
+        _push_note(m, "【🔄 自救·换 approach】前 %d 次实施都没过——原方案/做法行不通，这次**换一个根本"
+                      "不同的实现路子**，别在旧做法上小修小补；如果是**方案本身**错了，按铁律写 flag.json 举旗。"
+                   % (m["attempt_count"] - 1))
+        m["last_error"] = None
+        m["status"] = "IN_PROGRESS"
+        _set_phase(m, "impl")
+        append_event(run_dir, "self_recovery", milestone=m["id"], attempt_count=m["attempt_count"])
+        print("SELF-RECOVERY: %s 撞上限先自救一次（换 approach 重试），再失败才熔断" % m["id"], file=sys.stderr)
+        return 0
+    if over:
+        # 自救已用过、又撞上限（或 max=1 退化）：真熔断升级人工。
+        return _block(run_dir, milestones, m, m.get("last_error") or "超 max_attempts（自救后仍失败）")
     m["status"] = "IN_PROGRESS"
     _set_phase(m, "impl")
     return 0

@@ -97,11 +97,14 @@ def main():
             {"id": "M3", "goal": "会卡住的活", "max_attempts": 2},
         ]}, f)
     run("set-milestones", d, "--file", msfile2)
-    run("claim", d, "M3"); run("fail", d, "M3", "--error", "环境死结")  # attempt1
-    code, _ = run("claim", d, "M3")  # attempt2
-    run("fail", d, "M3", "--error", "还是死结")  # attempt2 达上限 → BLOCKED
+    run("claim", d, "M3"); run("fail", d, "M3", "--error", "环境死结")  # A1
+    run("claim", d, "M3"); run("fail", d, "M3", "--error", "还是死结")  # A2 撞上限 → 先自救一次（item5，不熔断）
     m3 = state._find(state.load_milestones(d), "M3")
-    check("熔断后 status", "fail 到上限", "BLOCKED", m3["status"])
+    check("撞上限先自救（不直接熔断）", "fail 到上限", "IN_PROGRESS", m3["status"])
+    check("自救标记 self_recovery_used", "self-recovery", True, m3.get("self_recovery_used"))
+    run("claim", d, "M3"); run("fail", d, "M3", "--error", "自救也失败")  # 自救后再撞 → 真熔断
+    m3 = state._find(state.load_milestones(d), "M3")
+    check("熔断后 status", "自救后再失败", "BLOCKED", m3["status"])
     code2, _ = run("claim", d, "M3")  # 已 BLOCKED 再 claim
     check("熔断后 claim 退出码", "claim blocked", 3, code2)
 

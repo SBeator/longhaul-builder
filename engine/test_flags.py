@@ -138,6 +138,9 @@ def main():
     _driver = open(os.path.join(_pdir, "driver.md"), encoding="utf-8").read()
     check("item2a 门1 加'方向/approach 对不对'重点维度", "方向 / approach 对不对" in _planrev)
     check("item2b driver plan-only 鼓励'出方案阶段就该举旗'", "出方案阶段就该举旗" in _driver)
+    # item6：举旗"先问后做"+给选项（涉及真实数据/不可逆动作时，先举旗别先写）
+    check("item6 driver flag 铁律含'先问后做'", "先问后做" in _driver)
+    check("item6 driver 举旗要给'1/2/3 个备选方案'", "1/2/3 个备选方案" in _driver or "1/2/3 个可选方案" in _driver)
 
     ok = all(_rows)
     print("\nflags/D 自测：%d/%d 绿" % (sum(_rows), len(_rows)))
