@@ -147,7 +147,12 @@ case "$cmd" in
     "$PY" "$ENG/state.py" init "$SD" --one-liner "$ONE" >/dev/null
     "$PY" "$ENG/age.py" skeleton --one-liner "$ONE" -o "$SD/spec.md" >/dev/null 2>&1 \
       || "$PY" "$ENG/age.py" skeleton --one-liner "$ONE" > "$SD/spec.md" 2>/dev/null || true
-    echo "✓ 建好 $PROJ ，spec 骨架在 $SD/spec.md"
+    # item8/9 脚手架：AGENTS.md 入口（AI 可读、指向不复制）+ 可见 iterations 历史目录（不再埋进 dotfolder）
+    NAME="$(basename "$PROJ")"
+    [ -f "$PROJ/AGENTS.md" ] || "$PY" "$ENG/age.py" agents --one-liner "$ONE" --name "$NAME" -o "$PROJ/AGENTS.md" >/dev/null 2>&1 || true
+    mkdir -p "$PROJ/docs/iterations" 2>/dev/null || true
+    [ -f "$PROJ/docs/iterations/README.md" ] || printf '# 迭代历史\n\n每轮 longhaul 构建在此留一条：日期 · 一句话做了啥 · 运行报告链接。\n`lhb report` 收尾时自动追加（item9/10）；这里是「项目怎么一步步来的」的可见事实源，不再埋进 .longhaul dotfolder。\n' > "$PROJ/docs/iterations/README.md" 2>/dev/null || true
+    echo "✓ 建好 $PROJ ｜ spec 骨架 $SD/spec.md ｜ AGENTS.md 入口 + docs/iterations/ 已生成"
     echo "  下一步：把 spec.md 的需求/验收标准填清（agent 跟人聊定），再 lhb plan + lhb confirm"
     ;;
   plan)

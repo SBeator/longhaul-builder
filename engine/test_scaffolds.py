@@ -67,6 +67,13 @@ def test_age():
     check("age CLI questions 退 0 + 输出", "questions", (0, True), (code, bool(out.strip())))
     code, out = run_cli(age, ["skeleton", "--one-liner", one])
     check("age CLI skeleton 退 0 + 输出", "skeleton", (0, True), (code, bool(out.strip())))
+    # item8 AGENTS.md 入口骨架（薄、指向不复制规则）
+    ag = age.agents_skeleton(one, "demo-proj")
+    check("age.agents_skeleton 含项目名 + 一句话", "agents", True, "demo-proj" in ag and one in ag)
+    check("age.agents 指向 spec/iterations 且声明'不复制'", "agents", True,
+          ".longhaul/spec.md" in ag and "docs/iterations" in ag and "不复制" in ag)
+    code, out = run_cli(age, ["agents", "--one-liner", one, "--name", "demo-proj"])
+    check("age CLI agents 退 0 + 含项目名", "agents", (0, True), (code, "demo-proj" in out))
 
 
 # ---- plan.py 冒烟 + age→plan 流水 -------------------------------------------

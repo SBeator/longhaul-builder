@@ -108,7 +108,34 @@ def skeleton(one_liner: str) -> str:
     return SPEC_SKELETON_TEMPLATE.format(one_liner=(one_liner or "<一句话需求>").strip())
 
 
-# ---- CLI：python3 engine/age.py questions|skeleton --one-liner "..." [-o spec.md] ----
+# ---- item8 脚手架：AGENTS.md 入口骨架（跨 agent 标准、AI 可读、指向不复制规则）------------
+
+AGENTS_SKELETON_TEMPLATE = """# {name}
+
+> {one_liner}
+
+由 **longhaul-builder** 自主构建/迭代（构建状态外置在 `.longhaul/`，像 `.git` 跟项目走）。
+
+## 这是什么 / 怎么跑
+- 需求 / 设计 / 验收：见 `.longhaul/spec.md`（冻结需求 + 「## 设计 / 架构」+ Acceptance Criteria）。
+- 怎么起 / 目录结构 / 用法：见 `README.md`（若有）。
+- 全局工程约定：指向你的事实源（如 `~/.config/agent-standards/core-conventions.md`）——**本文件只指向、不复制规则**（能力层与绑定层分离）。
+
+## 迭代历史（这项目怎么一步步来的）
+见 `docs/iterations/` —— 每轮 longhaul 构建留一条：日期 · 做了啥 · 运行报告链接（`lhb report` 收尾自动追加）。
+
+## 给接手的 AI（人 / Claude / Codex / Coco 通用）
+先读 ① `.longhaul/spec.md`（要做成什么）② `.longhaul/milestones.json`（本轮拆解 + 进度）③ `docs/iterations/` 最新一条（上轮到哪了）。**别手改 `.longhaul/` 里的状态文件**（cursor / milestones / events——框架管，像 .git）。
+"""
+
+
+def agents_skeleton(one_liner: str, name: str = "项目") -> str:
+    """产出 AGENTS.md 入口骨架——薄、指向 README/spec/iterations/全局约定，不复制规则（item8）。"""
+    return AGENTS_SKELETON_TEMPLATE.format(name=(name or "项目").strip(),
+                                           one_liner=(one_liner or "<一句话需求>").strip())
+
+
+# ---- CLI：python3 engine/age.py questions|skeleton|agents --one-liner "..." [-o file] ----
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
@@ -120,10 +147,23 @@ def main(argv=None) -> int:
     ss = sub.add_parser("skeleton", help="产出带标准章节的 spec.md 骨架")
     ss.add_argument("--one-liner", required=True)
     ss.add_argument("-o", "--out", default=None, help="写到文件（缺省打印到 stdout）")
+    sa = sub.add_parser("agents", help="产出 AGENTS.md 入口骨架（AI 可读，指向不复制）")
+    sa.add_argument("--one-liner", required=True)
+    sa.add_argument("--name", default="项目", help="项目名（默认目录名）")
+    sa.add_argument("-o", "--out", default=None, help="写到文件（缺省打印到 stdout）")
     args = ap.parse_args(argv)
 
     if args.cmd == "questions":
         sys.stdout.write(questions(args.one_liner))
+        return 0
+    if args.cmd == "agents":
+        text = agents_skeleton(args.one_liner, args.name)
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as f:
+                f.write(text)
+            print("wrote AGENTS.md to %s" % args.out)
+        else:
+            sys.stdout.write(text)
         return 0
     text = skeleton(args.one_liner)
     if args.out:

@@ -53,6 +53,14 @@ notify abort "含逗号, 和空格 的消息" "/tmp/a \$(touch $SENT) b/.longhau
 ok "notify 未被 \$() 注入（哨兵未创建）" "0" "$([ -e "$SENT" ] && echo 1 || echo 0)"
 unset LONGHAUL_NOTIFY_CMD
 
+echo "[T5] lhb new 脚手架自动产 AGENTS.md + docs/iterations/（item8/9）"
+NP="$(mktemp -d)/newproj"
+bash "$LHB" new "$NP" "做个示例工具" >/dev/null 2>&1
+ok "lhb new 产出 AGENTS.md" "1" "$([ -f "$NP/AGENTS.md" ] && echo 1 || echo 0)"
+ok "AGENTS.md 指向不复制(含 .longhaul/spec.md + 不复制)" "1" \
+   "$(grep -q '.longhaul/spec.md' "$NP/AGENTS.md" 2>/dev/null && grep -q '不复制' "$NP/AGENTS.md" 2>/dev/null && echo 1 || echo 0)"
+ok "lhb new 产出可见 docs/iterations/" "1" "$([ -d "$NP/docs/iterations" ] && echo 1 || echo 0)"
+
 echo ""
 echo "smoke_lhb：$PASS 绿 / $FAIL 红"
 [ "$FAIL" = 0 ]
