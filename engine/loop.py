@@ -62,7 +62,7 @@ LEASE_OWNER = "loop-tick"          # 审计用逻辑 owner 名（固定串，非
 #: F6 干预 inbox（intervention inbox · AC6 · DESIGN §2.6）。
 INBOX_DIR = "inbox"                       # state_dir/inbox/（人/绑定往这写一文件一消息）
 #: D 簇新增 resolve/confirm/reject——人对 driver 举旗(NEEDS_CONFIRM)的异步回插。
-KINDS = ("pause", "resume", "abort", "redirect", "respec", "resolve", "confirm", "reject")
+KINDS = ("pause", "resume", "abort", "redirect", "respec", "resolve", "confirm", "reject", "split")
 #: 人工 abort 专用退出码（区别于 infra/replan 升级的 4，让 loop.sh/cron/看板判别"人主动停"）。
 ABORT_EXIT = 5
 
@@ -1010,6 +1010,16 @@ def _apply_reject(state_dir, msg, opts):
     return None
 
 
+def _apply_split(state_dir, msg, opts):
+    """item11 举旗式拆分：人确认拆分 → state.split（把太大的 milestone 拆成子步、继续跑）。"""
+    mid = msg.get("milestone")
+    into = msg.get("into")
+    if not mid or not into:
+        raise ValueError("split missing 'milestone' or 'into'")
+    state.main(["split", state_dir, mid, "--into", into])
+    return None
+
+
 _APPLY = {
     "pause": _apply_pause,
     "resume": _apply_resume,
@@ -1019,6 +1029,7 @@ _APPLY = {
     "resolve": _apply_resolve,
     "confirm": _apply_confirm,
     "reject": _apply_reject,
+    "split": _apply_split,
 }
 
 
@@ -1233,6 +1244,7 @@ def cmd_inbox(args):
     fn = _drop_message(args.state_dir, args.kind,
                        milestone=getattr(args, "milestone", None),
                        instruction=getattr(args, "instruction", None),
+                       into=getattr(args, "into", None),
                        force=True if getattr(args, "force", False) else None)
     print("dropped inbox message: %s/%s/%s" % (args.state_dir, INBOX_DIR, fn))
     return 0
@@ -1281,9 +1293,10 @@ def main(argv=None):
 
     s = sub.add_parser("inbox", help="投递一条干预 inbox 消息（只写文件、不消费；消费在 tick）")
     s.add_argument("state_dir")
-    s.add_argument("kind", choices=KINDS, help="pause|resume|abort|redirect|respec|resolve|confirm|reject")
-    s.add_argument("--milestone", default=None, help="目标 milestone id（redirect/resolve/confirm/reject 用）")
+    s.add_argument("kind", choices=KINDS, help="pause|resume|abort|redirect|respec|resolve|confirm|reject|split")
+    s.add_argument("--milestone", default=None, help="目标 milestone id（redirect/resolve/confirm/reject/split 用）")
     s.add_argument("--instruction", default=None, help="一句话指示（redirect/respec/resolve/reject 用）")
+    s.add_argument("--into", default=None, help="拆分子目标，分号分隔（split 用），如 '后端骨架;前端页面'")
     s.add_argument("--force", action="store_true", help="redirect on DONE 时强制退回 plan")
     s.set_defaults(fn=cmd_inbox)
 

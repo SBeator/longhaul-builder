@@ -166,7 +166,9 @@ def _block(run_dir: str, milestones: list, m: dict, reason: str) -> int:
     save_milestones(run_dir, milestones)
     cur = _mirror_active_phase(run_dir, milestones)
     cur["phase"] = "blocked"
-    cur["next_action"] = f"{m['id']} 熔断升级人工：{reason}"
+    # item11 举旗式拆分：熔断＝反复失败、疑似步骤太大——提示人可拆成子步继续（不必死磕/手动 redirect）。
+    cur["next_action"] = (f"{m['id']} 熔断升级人工：{reason}。反复失败疑似太大——可拆成子步继续："
+                          f"lhb say <dir> split --milestone {m['id']} --into '子目标1;子目标2'")
     save_cursor(run_dir, cur)
     append_event(run_dir, "circuit_break", milestone=m["id"],
                  attempt_count=m["attempt_count"], last_error=m.get("last_error"))
@@ -703,6 +705,61 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_split(args) -> int:
+    """item11 举旗式拆分：把一个「太大」的 milestone 拆成若干可独立验收的子步（人确认后调）。
+
+    原 milestone 标 SKIPPED（留审计），按 --into 的子目标（分号分隔）在其位置插入子步
+    （id=<mid>.1/.2…，继承 acceptance 类型 / max_attempts，TODO@plan）；cursor 指向第一个子步。
+    「不死磕」：步骤太大就拆、继续跑，不硬熔断等人 redirect（2026-06-24，举旗式 A）。
+    """
+    run_dir = args.run_dir
+    milestones = load_milestones(run_dir)
+    m = _find(milestones, args.milestone)
+    goals = [g.strip() for g in (getattr(args, "into", None) or "").replace("；", ";").split(";") if g.strip()]
+    if len(goals) < 2:
+        print("error: --into 需要至少 2 个子目标（分号分隔），如 --into '后端骨架;前端页面'", file=sys.stderr)
+        return 2
+    idx = next(i for i, x in enumerate(milestones) if x["id"] == args.milestone)
+    acc = m.get("acceptance", {}) or {}
+    maxa = m.get("max_attempts", DEFAULT_MAX_ATTEMPTS)
+    subs = [{
+        "id": "%s.%d" % (args.milestone, i),
+        "goal": g,
+        "acceptance": dict(acc),
+        "status": "TODO",
+        "phase": "plan",
+        "attempt_count": 0,
+        "max_attempts": maxa,
+        "last_error": None,
+    } for i, g in enumerate(goals, 1)]
+    # 原 milestone 标 SKIPPED（不再被 _next_todo 选中），子步插在其后
+    m["status"] = "SKIPPED"
+    _set_phase(m, "done")
+    m["last_error"] = "已拆成 %d 子步：%s" % (len(subs), ", ".join(s["id"] for s in subs))
+    milestones[idx + 1:idx + 1] = subs
+    save_milestones(run_dir, milestones)
+    # 清原 milestone 的熔断/infra 账（它已被子步替换）
+    cur = load_cursor(run_dir)
+    for k in ("infra_retries", "replan_count", "reclaim_count"):
+        d = cur.get(k) or {}
+        if args.milestone in d:
+            d.pop(args.milestone, None)
+            cur[k] = d
+    ib = cur.get("infra_blocked") or []
+    if args.milestone in ib:
+        ib.remove(args.milestone)
+        cur["infra_blocked"] = ib
+    nxt = _next_todo(milestones)
+    cur["active_milestone"] = nxt["id"] if nxt else None
+    cur["active_phase"] = nxt.get("phase") if nxt else None
+    cur["phase"] = "build" if nxt else "done"
+    cur["next_action"] = "%s 已拆成 %d 子步，从 %s 继续" % (args.milestone, len(subs), nxt["id"] if nxt else "—")
+    save_cursor(run_dir, cur)
+    append_event(run_dir, "milestone_split", milestone=args.milestone, into=[s["id"] for s in subs])
+    print("split %s → %s" % (args.milestone, ", ".join(s["id"] for s in subs)))
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="state.py", description="longhaul-builder 状态台账")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -730,6 +787,7 @@ def main(argv=None) -> int:
     s = sub.add_parser("confirm"); s.add_argument("run_dir"); s.add_argument("milestone"); s.set_defaults(fn=cmd_confirm)
     s = sub.add_parser("reject"); s.add_argument("run_dir"); s.add_argument("milestone"); s.add_argument("--instruction", default=None); s.set_defaults(fn=cmd_reject)
     s = sub.add_parser("resolve"); s.add_argument("run_dir"); s.add_argument("milestone"); s.add_argument("--instruction", default=None); s.set_defaults(fn=cmd_resolve)
+    s = sub.add_parser("split"); s.add_argument("run_dir"); s.add_argument("milestone"); s.add_argument("--into", required=True, help="子目标，分号分隔，如 '后端骨架;前端页面'"); s.set_defaults(fn=cmd_split)
     s = sub.add_parser("flags"); s.add_argument("run_dir"); s.set_defaults(fn=cmd_flags)
 
     args = ap.parse_args(argv)
