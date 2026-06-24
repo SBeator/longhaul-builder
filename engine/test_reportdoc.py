@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""test_reportdoc.py —— item10 运行报告能力：reportdoc 从证据产 md + html。
+"""test_reportdoc.py —— 运行报告能力 v2：四段式结构化报告（背景/阶段进展表/耗时甘特/2维度复盘）。
 
-能力层（md/html，agent 无关）；飞书发布是绑定（装了 lark-cli 才发）。内容全来自 .longhaul 真证据。
+能力层（md/html，agent 无关）；复盘机器从运行信号生成、可复现；飞书发布是绑定。内容全来自真证据。
 """
 import json
 import os
@@ -25,48 +25,65 @@ def _mk():
     sd = os.path.join(proj, ".longhaul")
     state.main(["init", sd, "--one-liner", "做个示例驾驶舱"])
     with open(os.path.join(sd, "spec.md"), "w", encoding="utf-8") as f:
-        f.write("# 示例驾驶舱项目\n\n> 冻结需求。\n")
+        f.write("# 示例驾驶舱项目\n\n把散落各处的 AI 能力收敛到一个本地驾驶舱。\n\n> 冻结需求。\n")
     msf = os.path.join(proj, "ms.json")
     json.dump({"milestones": [
         {"id": "M1", "goal": "后端骨架", "acceptance": {"type": "tdd"}, "status": "DONE",
          "phase": "done", "attempt_count": 1, "max_attempts": 3},
-        {"id": "M2", "goal": "前端页面", "acceptance": {"type": "web-e2e"}, "status": "TODO",
-         "phase": "plan", "attempt_count": 0, "max_attempts": 3},
+        {"id": "M2", "goal": "前端页面：整页交互重做", "acceptance": {"type": "web-e2e"}, "status": "DONE",
+         "phase": "done", "attempt_count": 2, "max_attempts": 3},
     ]}, open(msf, "w", encoding="utf-8"), ensure_ascii=False)
     state.main(["set-milestones", sd, "--file", msf])
-    # 一条 step_timing（让耗时段非空）
-    with open(os.path.join(sd, "events.jsonl"), "a", encoding="utf-8") as f:
-        f.write(json.dumps({"ts": "2026-06-24T00:01:00Z", "ev": "step_timing", "milestone": "M1",
+    # 清掉 init 真实时间戳，写合成证据：M1 顺利、M2 撞超时白跑 + 一次返工
+    with open(os.path.join(sd, "events.jsonl"), "w", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": "2026-06-24T00:00:10Z", "ev": "step_timing", "milestone": "M1",
                             "phase": "impl", "step": "driver", "started": "2026-06-24T00:00:00Z",
-                            "duration_ms": 120000}, ensure_ascii=False) + "\n")
+                            "duration_ms": 120000}) + "\n")
+        f.write(json.dumps({"ts": "2026-06-24T00:03:00Z", "ev": "step_timing", "milestone": "M1",
+                            "step": "review", "started": "2026-06-24T00:02:30Z", "duration_ms": 30000}) + "\n")
+        f.write(json.dumps({"ts": "2026-06-24T00:20:00Z", "ev": "step_timing", "milestone": "M2",
+                            "phase": "impl", "step": "driver", "started": "2026-06-24T00:10:00Z",
+                            "duration_ms": 600000}) + "\n")
+        f.write(json.dumps({"ts": "2026-06-24T00:20:00Z", "ev": "infra_retry", "milestone": "M2",
+                            "reason": "driver(impl) infra: driver timed out after 600s"}) + "\n")
+        f.write(json.dumps({"ts": "2026-06-24T00:25:00Z", "ev": "fail", "milestone": "M2",
+                            "error": "判官 REVISE：表单提交没真落库", "attempt": 1}) + "\n")
     return sd
 
 
 def main():
     sd = _mk()
     md = reportdoc.build_md(sd, "2026-06-24-1530")
-    check("md 有标题'运行报告'", "运行报告" in md)
-    check("md 含项目一句话(示例驾驶舱)", "示例驾驶舱" in md)
-    check("md 有'结果' + N/N", "结果" in md and "1 / 2" in md)
-    check("md '各阶段做了什么'列出 M1/M2", "各阶段做了什么" in md and "M1" in md and "M2" in md)
-    check("md 有'耗时'段", "耗时" in md)
-    check("md M1 标✅完成、M2 标待做", "✅" in md and ("⬜" in md or "待做" in md))
+    check("md 标题'运行报告'", "运行报告" in md)
+    check("§1 背景 含项目背景 + 一句话", "1 · 背景" in md and "示例驾驶舱" in md and "收敛" in md)
+    check("§1 背景 给出 N/N + 历时", "2 / 2" in md and "历时" in md)
+    check("§2 阶段性进展 是 markdown 表格", "2 · 阶段性进展" in md and "| 步 |" in md and "|---|" in md)
+    check("§2 表格列出 M1/M2 + 状态", "`M1`" in md and "`M2`" in md and "✅" in md)
+    check("§2 表格备注标出 M2 折腾（超时/返工）", "超时" in md and ("返工" in md or "驳回" in md))
+    check("§3 耗时 含交互甘特占位 + 文字兜底", "3 · 耗时" in md and reportdoc._GANTT_MARK in md and "时间线" in md)
+    check("§4 复盘 两维度(框架/项目)", "4 · 总结与复盘" in md and "4a · 框架流程" in md and "4b · 项目本身" in md)
+    check("§4a 框架：一次过 + 超时白跑 + 改进建议", "一次过" in md and "超时白跑" in md and "改进建议（框架级）" in md)
+    check("§4b 项目：达成 + 需关注折腾步 + 改进建议", "达成" in md and "需关注" in md and "M2" in md and "改进建议（项目级）" in md)
+    check("§4 结论挂'可复现/运行信号'(非 agent 自述)", "运行信号" in md and "可复现" in md)
 
-    html = reportdoc.build_html(md, "示例报告")
-    check("html 合法外壳(DOCTYPE/head/body)", "<!DOCTYPE html>" in html and "<body>" in html)
-    check("html 渲了标题/章节(h1/h2)", "<h1>" in html and "<h2>" in html)
-    check("html 列表渲成 <li>", "<li>" in html)
+    # html：占位符被交互甘特替换 + 表格渲成 <table>
+    html = reportdoc.build_html(md, "示例报告", sd)
+    check("html 合法外壳", "<!DOCTYPE html>" in html and "<body>" in html)
+    check("html 渲了章节(h1/h2/h3)", "<h1>" in html and "<h2>" in html and "<h3>" in html)
+    check("html 表格渲成 <table>/<th>/<td>", "<table>" in html and "<th>" in html and "<td>" in html)
+    check("html 内嵌了交互甘特(画布+DATA)", "lhg-canvas" in html and "var DATA=" in html)
+    check("html 甘特注入真 reason(超时白跑可见)", "timed out" in html)
+    check("html 透传 details 折叠(文字时间线兜底)", "<details>" in html and "<summary>" in html)
     check("html 加粗渲成 <strong>", "<strong>" in html)
-    check("html 代码块渲成 <pre>", "<pre>" in html)
-    check("html 转义了 < >（无裸 <script 注入）", "<script" not in md or "&lt;script" in html or True)
+    check("无 state_dir 时占位符被安全丢弃(不留裸标记)", reportdoc._GANTT_MARK not in reportdoc.build_html(md, "x"))
 
-    # _one_liner 去 spec 骨架前缀（报告标题更干净，不要"运行报告 — spec — X"）
+    # _one_liner 去 spec 骨架前缀
     d2 = tempfile.mkdtemp(prefix="lhb-one-")
     open(os.path.join(d2, "spec.md"), "w", encoding="utf-8").write("# spec — 干净标题测试\n\n正文\n")
     check("_one_liner 去掉 'spec — ' 前缀", reportdoc._one_liner(d2) == "干净标题测试")
 
     npass = sum(1 for r in _rows if r)
-    print("\n运行报告能力：%d/%d 绿" % (npass, len(_rows)))
+    print("\n运行报告能力 v2：%d/%d 绿" % (npass, len(_rows)))
     return 0 if npass == len(_rows) else 1
 
 
