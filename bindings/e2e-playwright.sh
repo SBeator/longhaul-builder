@@ -19,11 +19,17 @@ URL="${LONGHAUL_E2E_URL:?需要 LONGHAUL_E2E_URL（被测页面地址）}"
 EXPECT="${LONGHAUL_E2E_EXPECT:-body}"          # 等到这个 CSS 选择器在浏览器里真出现才算渲染成功
 SHOT="${LONGHAUL_E2E_SHOT:-e2e-screenshot.png}"
 TIMEOUT_MS="${LONGHAUL_E2E_TIMEOUT_MS:-15000}"
+# 🔒 防假绿（2026-06-24）：不止"选择器存在"——空壳/占位/加载态也会满足 wait_for_selector ＝ 假绿。
+# 下面要求匹配元素**真有内容**（非空文本 或 有子元素），且不命中占位/加载态标记。
+MIN_COUNT="${LONGHAUL_E2E_MIN_COUNT:-1}"        # 至少 N 个匹配元素有真内容（列表类设大点，逼真渲染条目）
+FORBID="${LONGHAUL_E2E_FORBID:-加载中|loading|placeholder|占位|暂无数据|skeleton}"  # 命中文本=占位/加载=假绿
+ALLOW_EMPTY="${LONGHAUL_E2E_ALLOW_EMPTY:-}"     # =1 放宽到"只要选择器存在"（极少用，明确知道在干嘛）
 mkdir -p "$(dirname "$SHOT")" 2>/dev/null || true
 
-python3 - "$URL" "$EXPECT" "$SHOT" "$TIMEOUT_MS" <<'PY'
-import sys
+python3 - "$URL" "$EXPECT" "$SHOT" "$TIMEOUT_MS" "$MIN_COUNT" "$FORBID" "$ALLOW_EMPTY" <<'PY'
+import sys, re
 url, expect, shot, timeout = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+min_count, forbid, allow_empty = int(sys.argv[5]), sys.argv[6], sys.argv[7] == "1"
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:
@@ -35,10 +41,29 @@ try:
         browser = p.chromium.launch()
         page = browser.new_page()
         page.goto(url, timeout=timeout)
-        page.wait_for_selector(expect, timeout=timeout)   # 真在浏览器里等元素出现
-        page.screenshot(path=shot, full_page=True)         # 真截图存证（给 report 附图）
+        page.wait_for_selector(expect, timeout=timeout)   # ① 元素真在浏览器里出现
+        # ② 🔒 防假绿：匹配元素要有"真内容"（非空文本 或 有子元素），不是空壳/占位/加载态
+        els = page.query_selector_all(expect)
+        real, placeholder_hit = 0, None
+        for el in els:
+            txt = (el.inner_text() or "").strip()
+            nchild = el.evaluate("e => e.children.length")
+            if forbid and txt and re.search(forbid, txt, re.I):
+                placeholder_hit = txt[:60]
+            if txt or nchild > 0:
+                real += 1
+        page.screenshot(path=shot, full_page=True)         # 真截图存证（过没过都留证，给 report 附图）
         browser.close()
-    print("E2E PASS: 选择器 %s 已渲染；截图 -> %s" % (expect, shot))
+    if not allow_empty and placeholder_hit:
+        print("E2E FAIL（假绿防护）：%s 命中占位/加载态标记 '%s'，疑似没真渲染" % (expect, placeholder_hit),
+              file=sys.stderr)
+        sys.exit(1)
+    if not allow_empty and real < min_count:
+        print("E2E FAIL（假绿防护）：%s 匹配 %d 个但只有 %d 个有真内容（非空），< 期望 %d——空壳/占位不算渲染"
+              % (expect, len(els), real, min_count), file=sys.stderr)
+        sys.exit(1)
+    print("E2E PASS：%s 渲染了真内容（%d/%d 非空，min=%d）；截图 -> %s"
+          % (expect, real, len(els), min_count, shot))
     sys.exit(0)
 except Exception as e:                                      # noqa: BLE001
     print("E2E FAIL: %s" % e, file=sys.stderr)
