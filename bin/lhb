@@ -227,10 +227,11 @@ case "$cmd" in
     ONE="$("$PY" -c 'import sys;sys.path.insert(0,sys.argv[1]);import reportdoc;print(reportdoc._one_liner(sys.argv[2]))' "$ENG" "$SD" 2>/dev/null || true)"; ONE="${ONE:-longhaul build}"
     "$PY" "$ENG/reportdoc.py" "$SD" --stamp "$STAMP" > "$IT/$STAMP.md" 2>/dev/null || { die "产报告失败"; }
     "$PY" "$ENG/reportdoc.py" "$SD" --stamp "$STAMP" --format html > "$IT/$STAMP.html" 2>/dev/null || true
-    printf -- '- %s · %s · [报告](%s.md) / [html](%s.html)\n' "$STAMP" "$ONE" "$STAMP" "$STAMP" >> "$IT/README.md"
-    echo "✓ 运行报告：$IT/$STAMP.md ｜ $IT/$STAMP.html ｜ 已追加 docs/iterations/README.md"
-    URL="$(bash "$BIND/publish-feishu.sh" "$IT/$STAMP.md" "运行报告 $STAMP — $ONE" 2>/dev/null | grep -E '^https://' | head -1 || true)"
-    [ -n "$URL" ] && echo "  飞书文档：$URL"
+    # 先发飞书（装了 lark-cli），拿到 URL 一起写进 iterations 索引——迭代日志直接点到飞书报告。
+    URL="$(bash "$BIND/publish-feishu.sh" "$IT/$STAMP.md" 2>/dev/null | grep -E '^https://' | head -1 || true)"
+    FS=""; [ -n "$URL" ] && FS=" / [飞书]($URL)"
+    printf -- '- %s · %s · [报告](%s.md) / [html](%s.html)%s\n' "$STAMP" "$ONE" "$STAMP" "$STAMP" "$FS" >> "$IT/README.md"
+    echo "✓ 运行报告：$IT/$STAMP.md ｜ $IT/$STAMP.html ｜ 已追加 docs/iterations/README.md${URL:+ ｜ 飞书 $URL}"
     ;;
   agents)
     PROJ="${1:?usage: lhb agents <dir> [--driver claude|codex] [--judge claude|codex]}"; shift || true

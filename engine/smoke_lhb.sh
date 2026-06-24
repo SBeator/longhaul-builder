@@ -63,7 +63,7 @@ ok "lhb new 产出可见 docs/iterations/" "1" "$([ -d "$NP/docs/iterations" ] &
 
 echo "[T6] lhb report-doc 产 md + html 进 docs/iterations/ + 追加索引（item10）"
 P6="$(mk)"
-bash "$LHB" report-doc "$P6" >/dev/null 2>&1
+LONGHAUL_NO_PUBLISH=1 bash "$LHB" report-doc "$P6" >/dev/null 2>&1   # 测试不真发飞书（免 junk 文档）
 GENMD="$(ls "$P6/docs/iterations/"*.md 2>/dev/null | grep -v README | head -1)"
 ok "report-doc 产出 .md 报告" "1" "$([ -n "$GENMD" ] && [ -f "$GENMD" ] && echo 1 || echo 0)"
 ok "report-doc 产出对应 .html" "1" "$([ -n "$GENMD" ] && [ -f "${GENMD%.md}.html" ] && echo 1 || echo 0)"
