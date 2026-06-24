@@ -19,7 +19,6 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gantt        # noqa: E402
-import report       # noqa: E402
 import state        # noqa: E402
 import timeline     # noqa: E402
 
@@ -224,15 +223,13 @@ def build_md(state_dir, stamp="", feishu=False):
 
     out += ["## 3 · 耗时", ""]
     if feishu:
-        out += ["本轮**交互甘特**见本文档**末尾的互动图**（每步出方案/实现/审/超时/返工，hover 看详情、可横向缩放）。", ""]
+        out += ["下方为本轮**交互甘特**（每步出方案/实现/审/超时/返工，hover 看详情、可横向缩放）：", ""]
     else:
         out += ["下图为本轮**交互甘特**（每步出方案/实现/审/超时/返工，hover 看详情）；md 阅读器看不到交互图时，见下方文字时间线。",
                 "", _GANTT_MARK, "",
                 "<details><summary>文字时间线（兜底）</summary>", "", "```", timeline.render(state_dir), "```", "", "</details>", ""]
 
     out += [build_retro(state_dir)]
-
-    out += ["## 5 · 焦点 milestone 详述（其余见 `.longhaul/evidence/<M>/`）", "", report.render(state_dir), ""]
     return "\n".join(out)
 
 

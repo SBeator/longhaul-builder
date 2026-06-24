@@ -80,7 +80,8 @@ def main():
     # 飞书 flavor：耗时段指向文末妙笔甘特、去掉本地占位/details（飞书里甘特是独立 HTML Box）
     fmd = reportdoc.build_md(sd, "2026-06-24", feishu=True)
     check("飞书 flavor 去掉 GANTT 占位 + details", reportdoc._GANTT_MARK not in fmd and "<details>" not in fmd)
-    check("飞书 flavor 耗时段指向文末甘特", "末尾的互动图" in fmd and "## 3 · 耗时" in fmd)
+    check("飞书 flavor 耗时段引出下方甘特", "下方为本轮" in fmd and "## 3 · 耗时" in fmd)
+    check("报告不含 §5 焦点详述（用户砍了）", "5 · 焦点" not in md and "5 · 焦点" not in fmd)
     check("飞书 flavor 仍保留四段+表格+复盘", "1 · 背景" in fmd and "| 步 |" in fmd and "4a · 框架流程" in fmd and "4b · 项目本身" in fmd)
 
     # _one_liner 去 spec 骨架前缀
