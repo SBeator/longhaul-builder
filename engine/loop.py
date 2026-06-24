@@ -613,6 +613,10 @@ def _phase_plan(state_dir, m, opts):
         return infra_retry(state_dir, mid, "driver(plan) infra: %s" % _reason,
                            opts["max_infra_retries"], "plan")
     _reset_infra(state_dir, mid)
+    # 减返工：driver 在出方案阶段就发现要偏离 spec / 有重大存疑 → 此时举旗（写 flag.json），
+    # impl 前先让人确认，省掉"写完整步 impl 才发现走偏再推倒"的返工（2026-06-24）。
+    if _detect_and_raise_flag(state_dir, mid):
+        return 0   # 已标 NEEDS_CONFIRM + 推进 cursor，跳过门1/impl、非阻塞等人确认
     return _run_state(state_dir, "advance-phase", mid, phase="plan")
 
 

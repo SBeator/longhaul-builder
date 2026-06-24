@@ -118,6 +118,27 @@ def main():
     m1 = {m["id"]: m for m in state.load_milestones(sd8)}["M1"]
     check("inbox confirm 端到端 → M1 DONE", m1["status"] == "DONE")
 
+    # === item2c 减返工：_phase_plan 也检测 plan 期举旗 → NEEDS_CONFIRM（早举旗、不进门1/impl）===
+    sd9 = _fresh([_m("M1", "IN_PROGRESS", "plan"), _m("M2", "TODO", "plan")])
+    ev9 = os.path.join(sd9, "evidence", "M1"); os.makedirs(ev9, exist_ok=True)
+    with open(os.path.join(ev9, "flag.json"), "w", encoding="utf-8") as f:
+        json.dump({"kind": "spec-divergence", "summary": "出方案就发现要偏离 spec，impl 前先问"},
+                  f, ensure_ascii=False)
+    m_m1 = state._find(state.load_milestones(sd9), "M1")
+    opts9 = {"driver_cmd": "true", "driver_timeout": 30, "dry_run": False,
+             "max_infra_retries": 5, "max_replans": 5, "judge_cmd": "true",
+             "probe_timeout": 30, "review_timeout": 30}
+    loop._phase_plan(sd9, m_m1, opts9)
+    m1 = {m["id"]: m for m in state.load_milestones(sd9)}["M1"]
+    check("item2c _phase_plan 检测 plan 期举旗 → M1 NEEDS_CONFIRM", m1["status"] == "NEEDS_CONFIRM")
+    check("item2c plan 举旗后不进 plan_review", m1["phase"] != "plan_review")
+    # item2a/2b：prompt 硬化（门1 重点审方向 + driver 早举旗）已写入模板
+    _pdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
+    _planrev = open(os.path.join(_pdir, "plan_review.md"), encoding="utf-8").read()
+    _driver = open(os.path.join(_pdir, "driver.md"), encoding="utf-8").read()
+    check("item2a 门1 加'方向/approach 对不对'重点维度", "方向 / approach 对不对" in _planrev)
+    check("item2b driver plan-only 鼓励'出方案阶段就该举旗'", "出方案阶段就该举旗" in _driver)
+
     ok = all(_rows)
     print("\nflags/D 自测：%d/%d 绿" % (sum(_rows), len(_rows)))
     return 0 if ok else 1
