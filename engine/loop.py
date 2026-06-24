@@ -49,9 +49,9 @@ import review   # noqa: E402  可配置 AI 判官适配器
 
 DEFAULT_MAX_INFRA_RETRIES = 5
 DEFAULT_MAX_REPLANS = 5
-DEFAULT_DRIVER_TIMEOUT = 600
-DEFAULT_PROBE_TIMEOUT = 600
-DEFAULT_REVIEW_TIMEOUT = 600
+DEFAULT_DRIVER_TIMEOUT = int(os.environ.get("LONGHAUL_DRIVER_TIMEOUT", "600"))
+DEFAULT_PROBE_TIMEOUT = int(os.environ.get("LONGHAUL_PROBE_TIMEOUT", "600"))
+DEFAULT_REVIEW_TIMEOUT = int(os.environ.get("LONGHAUL_REVIEW_TIMEOUT", "600"))
 
 #: F7 看门狗（watchdog · AC7 · DESIGN §2.5）默认值。
 #: lease TTL = 心跳新鲜免查 pid 的快路径阈值 + pid 复用误判的第二道闸（取宽松 step 上界）。
@@ -553,6 +553,41 @@ def _detect_and_raise_flag(state_dir, mid):
 
 # ---- 各相位子例程（每相位做"该相位一件事"，做完调 state 动词，tick 退出）-----
 
+def _resume_note(state_dir, mid, mode):
+    """P0「超时不白跑」：impl 重试时告诉 driver「工作区已有部分进展、接着做完别重来」。
+
+    仅在 mode=implement 且本步发生过 infra_retry（上次被超时/崩溃中断）且工作区确有未提交改动时，
+    返回一段醒目的续跑指令；否则空串（driver.md 的 {{resume_context}} 渲染成空）。
+    修复"driver 改的是真文件、超时被杀代码还在盘上，却拿同 prompt 从头重来"的白跑（2026-06-24）。
+    """
+    if mode != "implement":
+        return ""
+    n = (_cursor(state_dir).get("infra_retries") or {}).get(mid, 0)
+    if n <= 0:
+        return ""
+    proj = os.path.dirname(os.path.abspath(state_dir))
+    changed = []
+    rc, head, _ = _git(proj, "rev-parse", "HEAD")
+    if rc == 0 and head.strip():
+        _, names, _ = _git(proj, "diff", "--name-only", head.strip())
+        changed += [l.strip() for l in names.splitlines() if l.strip()]
+    _, others, _ = _git(proj, "ls-files", "--others", "--exclude-standard")
+    changed += [l.strip() for l in others.splitlines() if l.strip()]
+    # 排除框架自己的状态目录（.longhaul/，像 .git——不是 driver 的代码进展，列出来反误导）
+    sdir = os.path.basename(os.path.normpath(state_dir))
+    changed = [f for f in changed if f != sdir and not f.startswith(sdir + "/")]
+    changed = list(dict.fromkeys(changed))   # 去重保序
+    if not changed:
+        return ""   # 上次刚启动就被杀、没留下进展 → 当全新做
+    flist = "\n".join("  - " + f for f in changed[:40])
+    more = "" if len(changed) <= 40 else "\n  …（共 %d 个，git status 看全）" % len(changed)
+    return ("## ⚠️ 续跑：上次被中断，接着做完、绝不从头重来\n"
+            "上次实施被**超时/崩溃中断**（本步第 %d 次基建重试）。**工作区已有未提交的部分进展**，改动文件：\n"
+            "%s%s\n"
+            "**先 `git status` / `git diff` 看你上次做到哪**，然后**在已有进展上接着做完**——绝不删掉重写、绝不从零重来。\n"
+            % (n, flist, more))
+
+
 def _driver_ctx(state_dir, mid, mode):
     """driver prompt 的 ctx：键名严格对齐 driver.md 占位（F1：拼错会静默 no-op）。"""
     return {
@@ -560,6 +595,7 @@ def _driver_ctx(state_dir, mid, mode):
         "state_dir": os.path.abspath(state_dir),
         "carry_forward": "(loop tick — 见 events.jsonl / notes.md)",
         "mode": mode,
+        "resume_context": _resume_note(state_dir, mid, mode),   # P0 超时续跑（非重试时为空）
     }
 
 
