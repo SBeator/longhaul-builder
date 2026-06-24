@@ -53,22 +53,27 @@ notify abort "含逗号, 和空格 的消息" "/tmp/a \$(touch $SENT) b/.longhau
 ok "notify 未被 \$() 注入（哨兵未创建）" "0" "$([ -e "$SENT" ] && echo 1 || echo 0)"
 unset LONGHAUL_NOTIFY_CMD
 
-echo "[T5] lhb new 脚手架自动产 AGENTS.md + docs/iterations/（item8/9）"
+echo "[T5] lhb new 脚手架自动产 AGENTS.md + docs/iterations/INDEX.md（item8/9 + 文档收敛）"
 NP="$(mktemp -d)/newproj"
 bash "$LHB" new "$NP" "做个示例工具" >/dev/null 2>&1
 ok "lhb new 产出 AGENTS.md" "1" "$([ -f "$NP/AGENTS.md" ] && echo 1 || echo 0)"
 ok "AGENTS.md 指向不复制(含 .longhaul/spec.md + 不复制)" "1" \
    "$(grep -q '.longhaul/spec.md' "$NP/AGENTS.md" 2>/dev/null && grep -q '不复制' "$NP/AGENTS.md" 2>/dev/null && echo 1 || echo 0)"
-ok "lhb new 产出可见 docs/iterations/" "1" "$([ -d "$NP/docs/iterations" ] && echo 1 || echo 0)"
+ok "lhb new 产出结构化 docs/iterations/INDEX.md" "1" \
+   "$([ -f "$NP/docs/iterations/INDEX.md" ] && grep -q '迭代历史' "$NP/docs/iterations/INDEX.md" && echo 1 || echo 0)"
 
-echo "[T6] lhb report-doc 产 md + html 进 docs/iterations/ + 追加索引（item10）"
+echo "[T6] lhb archive-iteration 收敛归档进 docs/iterations/<序号>-<日期>-<slug>/（文档收敛）"
 P6="$(mk)"
-LONGHAUL_NO_PUBLISH=1 bash "$LHB" report-doc "$P6" >/dev/null 2>&1   # 测试不真发飞书（免 junk 文档）
-GENMD="$(ls "$P6/docs/iterations/"*.md 2>/dev/null | grep -v README | head -1)"
-ok "report-doc 产出 .md 报告" "1" "$([ -n "$GENMD" ] && [ -f "$GENMD" ] && echo 1 || echo 0)"
-ok "report-doc 产出对应 .html" "1" "$([ -n "$GENMD" ] && [ -f "${GENMD%.md}.html" ] && echo 1 || echo 0)"
-ok "md 含'运行报告'标题" "1" "$(grep -q '运行报告' "$GENMD" 2>/dev/null && echo 1 || echo 0)"
-ok "追加进 docs/iterations/README.md 索引" "1" "$(grep -q '报告' "$P6/docs/iterations/README.md" 2>/dev/null && echo 1 || echo 0)"
+LONGHAUL_NO_PUBLISH=1 bash "$LHB" archive-iteration "$P6" >/dev/null 2>&1   # 测试不真发飞书（免 junk 文档）
+ITDIR="$(ls -d "$P6/docs/iterations/"[0-9][0-9]-* 2>/dev/null | head -1)"
+ok "归档出 <序号>-<日期>-<slug>/ 目录" "1" "$([ -n "$ITDIR" ] && [ -d "$ITDIR" ] && echo 1 || echo 0)"
+ok "目录内有 report.md（v2 四段式）" "1" "$([ -f "$ITDIR/report.md" ] && grep -q '运行报告' "$ITDIR/report.md" && echo 1 || echo 0)"
+ok "目录内有 report.html + state 证据快照 + meta" "1" \
+   "$([ -f "$ITDIR/report.html" ] && [ -f "$ITDIR/state/milestones.json" ] && [ -f "$ITDIR/meta.json" ] && echo 1 || echo 0)"
+ok "重建了 INDEX.md 结构化列表(最新置顶)" "1" \
+   "$(grep -q '⭐ 最新' "$P6/docs/iterations/INDEX.md" 2>/dev/null && echo 1 || echo 0)"
+ok "report-doc 仍是别名(复用同目录不新建序号)" "1" \
+   "$(LONGHAUL_NO_PUBLISH=1 bash "$LHB" report-doc "$P6" >/dev/null 2>&1; [ "$(ls -d "$P6/docs/iterations/"[0-9][0-9]-* 2>/dev/null | wc -l)" = "1" ] && echo 1 || echo 0)"
 
 echo ""
 echo "smoke_lhb：$PASS 绿 / $FAIL 红"

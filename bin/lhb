@@ -151,8 +151,9 @@ case "$cmd" in
     NAME="$(basename "$PROJ")"
     [ -f "$PROJ/AGENTS.md" ] || "$PY" "$ENG/age.py" agents --one-liner "$ONE" --name "$NAME" -o "$PROJ/AGENTS.md" >/dev/null 2>&1 || true
     mkdir -p "$PROJ/docs/iterations" 2>/dev/null || true
-    [ -f "$PROJ/docs/iterations/README.md" ] || printf '# 迭代历史\n\n每轮 longhaul 构建在此留一条：日期 · 一句话做了啥 · 运行报告链接。\n`lhb report` 收尾时自动追加（item9/10）；这里是「项目怎么一步步来的」的可见事实源，不再埋进 .longhaul dotfolder。\n' > "$PROJ/docs/iterations/README.md" 2>/dev/null || true
-    echo "✓ 建好 $PROJ ｜ spec 骨架 $SD/spec.md ｜ AGENTS.md 入口 + docs/iterations/ 已生成"
+    # 文档收敛：生成结构化 INDEX.md（空列表占位）；每轮构建跑完 lhb 自动归档进 docs/iterations/<序号>-<日期>-<slug>/。
+    "$PY" "$ENG/iterations.py" index "$PROJ" >/dev/null 2>&1 || true
+    echo "✓ 建好 $PROJ ｜ spec 骨架 $SD/spec.md ｜ AGENTS.md 入口 + docs/iterations/INDEX.md 已生成"
     echo "  下一步：把 spec.md 的需求/验收标准填清（agent 跟人聊定），再 lhb plan + lhb confirm"
     ;;
   plan)
@@ -188,7 +189,7 @@ case "$cmd" in
     while :; do
       NEXT="$("$PY" "$ENG/loop.py" status "$SD" --next-json 2>/dev/null || true)"
       case "$NEXT" in
-        *'"state": "done"'*)    notify_progress "$SD"; bash "$0" report-doc "$PROJ" >/dev/null 2>&1 || true; notify done "全部 milestone DONE，等你最终验收（运行报告已生成进 docs/iterations/）" "$SD"; echo "✅ DONE（等最终验收 ｜ 运行报告见 docs/iterations/）"; break;;
+        *'"state": "done"'*)    notify_progress "$SD"; bash "$0" archive-iteration "$PROJ" >/dev/null 2>&1 || true; notify done "全部 milestone DONE，等你最终验收（已归档进 docs/iterations/，含运行报告+证据快照）" "$SD"; echo "✅ DONE（等最终验收 ｜ 见 docs/iterations/INDEX.md）"; break;;
         *'"state": "blocked"'*) notify blocked "卡住了(熔断)，来看一下" "$SD"; echo "✗ BLOCKED（需要你）"; break;;
         *'"state": "needs_confirm"'*) notify_new_flags "$SD"; notify needs_confirm "其余都跑完了，但有举旗待你确认（resolve/confirm/reject）——回我处理一下" "$SD"; echo "🚩 NEEDS_CONFIRM（等你确认举旗）"; break;;
       esac
@@ -219,19 +220,18 @@ case "$cmd" in
             "$PY" "$ENG/timeline.py" "$(sd_of "$PROJ")" "$@" ;;
   report) PROJ="${1:?usage: lhb report <dir> [--milestone M] [--images M] [--json]}"; shift || true
           "$PY" "$ENG/report.py" "$(sd_of "$PROJ")" "$@" ;;
-  report-doc)
-    # item10 运行报告能力：从证据产 md + html → 写进可见的 docs/iterations/ + 追加索引；装了 lark-cli 就发飞书。
-    PROJ="${1:?usage: lhb report-doc <dir>}"; SD="$(sd_of "$PROJ")"
+  report-doc|archive-iteration)
+    # 文档收敛：把当前 .longhaul 归档成 docs/iterations/<序号>-<日期>-<slug>/（report.md/html v2 四段式 +
+    # state 原始证据快照 + meta.json），并重建 INDEX 结构化列表；装了 lark-cli 就发飞书、链接回填进 INDEX。
+    # 已归档过的活动构建会**复用同目录刷新**（不新建序号）。report-doc 是历史别名。
+    PROJ="${1:?usage: lhb archive-iteration <dir>}"; SD="$(sd_of "$PROJ")"
     STAMP="$(date +%Y-%m-%d-%H%M)"
-    IT="$PROJ/docs/iterations"; mkdir -p "$IT"
-    ONE="$("$PY" -c 'import sys;sys.path.insert(0,sys.argv[1]);import reportdoc;print(reportdoc._one_liner(sys.argv[2]))' "$ENG" "$SD" 2>/dev/null || true)"; ONE="${ONE:-longhaul build}"
-    "$PY" "$ENG/reportdoc.py" "$SD" --stamp "$STAMP" > "$IT/$STAMP.md" 2>/dev/null || { die "产报告失败"; }
-    "$PY" "$ENG/reportdoc.py" "$SD" --stamp "$STAMP" --format html > "$IT/$STAMP.html" 2>/dev/null || true
-    # 先发飞书（装了 lark-cli），拿到 URL 一起写进 iterations 索引——迭代日志直接点到飞书报告。
-    URL="$(bash "$BIND/publish-feishu.sh" "$IT/$STAMP.md" 2>/dev/null | grep -E '^https://' | head -1 || true)"
-    FS=""; [ -n "$URL" ] && FS=" / [飞书]($URL)"
-    printf -- '- %s · %s · [报告](%s.md) / [html](%s.html)%s\n' "$STAMP" "$ONE" "$STAMP" "$STAMP" "$FS" >> "$IT/README.md"
-    echo "✓ 运行报告：$IT/$STAMP.md ｜ $IT/$STAMP.html ｜ 已追加 docs/iterations/README.md${URL:+ ｜ 飞书 $URL}"
+    DIR="$("$PY" "$ENG/iterations.py" archive "$PROJ" --state-dir "$SD" --stamp "$STAMP" 2>/dev/null)" || { die "归档失败"; }
+    [ -n "$DIR" ] || die "归档失败（无目录名）"
+    MD="$PROJ/docs/iterations/$DIR/report.md"
+    URL="$(bash "$BIND/publish-feishu.sh" "$MD" 2>/dev/null | grep -E '^https://' | head -1 || true)"
+    [ -n "$URL" ] && { "$PY" "$ENG/iterations.py" set-feishu "$PROJ" "$URL" --state-dir "$SD" >/dev/null 2>&1 || true; }
+    echo "✓ 已归档迭代 docs/iterations/$DIR/（report.md/html + state/ + meta）｜ INDEX 已重建${URL:+ ｜ 飞书 $URL}"
     ;;
   agents)
     PROJ="${1:?usage: lhb agents <dir> [--driver claude|codex] [--judge claude|codex]}"; shift || true
