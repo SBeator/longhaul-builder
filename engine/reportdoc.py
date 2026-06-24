@@ -65,14 +65,26 @@ def _clip(s, n=40):
     return s if len(s) <= n else s[:n] + "…"
 
 
-def _did(goal):
-    """「做了什么」清楚标题：取 goal 的首个分句（冒号/句号前），完整不用 … 截断。
+def _did(goal, limit=86):
+    """「做了什么」＝总结这步的修改内容（不只标题、也不堆全文）。
 
-    milestone 的 goal 多是「清楚标题：一大段验收细节」，标题就是这步干了啥的干净说法；
-    不截断成「首页·驾驶舱总览：#home-kpis 4 …」这种看不懂的半句。"""
+    milestone 的 goal 多是「标题：组件 + 组件 + …」。做法：去掉技术噪声（#选择器/[属性]/.类名/
+    残留标点），保留 goal 自身可读的「标题：组件」结构，在自然断点处收尾（超长加「等」）——
+    既说清改了啥、又不超长、不留半个词的 … 截断。"""
     g = (goal or "").replace("\n", " ").strip()
-    cuts = [g.find(s) for s in ("：", ":", "。") if g.find(s) > 2]
-    return g[:min(cuts)].strip() if cuts else g
+    g = re.sub(r"#[\w-]+", "", g)                      # #选择器
+    g = re.sub(r"\[[^\]]*\]", "", g)                   # [data-attr]
+    g = re.sub(r"\.[a-zA-Z][\w-]*", "", g)             # .类名 / .html
+    g = re.sub(r"[（(]\s*[+、，,/；;]+\s*", "（", g)       # 去括号开头被删选择器留下的残标点
+    g = re.sub(r"\s+([）)])", r"\1", g)
+    g = re.sub(r"\s+", " ", g)
+    g = re.sub(r"：\s+", "：", g).strip()
+    if len(g) <= limit:
+        return g
+    head = g[:limit]
+    brk = set("+、。；/ ")
+    cut = max((i for i in range(len(head) - 1, int(limit * 0.5), -1) if head[i] in brk), default=limit)
+    return head[:cut].rstrip(" +、。；/") + " 等"
 
 
 def _signals(state_dir):
