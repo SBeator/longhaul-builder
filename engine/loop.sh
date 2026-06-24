@@ -33,5 +33,16 @@ esac
 # 跑恰好一个 tick。退出码透传（见 loop.py 契约）：0 推进/no-op；2 用法错；3 产品熔断；
 # 4 基建/replan 熔断升级；5 人工 abort；6 P0 未确认（等人 `state.py p0-confirm`）。
 # while/cron 包装应在 6（P0 门）/3/4/5 上**停下来喊人**，不要空转重试。
-"$PY" "$ENGINE_DIR/loop.py" tick "$STATE_DIR" "$@"
+RC=0
+"$PY" "$ENGINE_DIR/loop.py" tick "$STATE_DIR" "$@" || RC=$?
+
+# 自动 commit：tick 成功推进后(RC=0)，把刚完成的 milestone 改动各提交一笔（best-effort，不改退出码）。
+# LONGHAUL_AUTOCOMMIT=0 可关；非 git 仓 / 没装绑定都安静跳过。绑定自己检测「DONE 但未提交」。
+if [ "$RC" = "0" ] && [ "${LONGHAUL_AUTOCOMMIT:-1}" != "0" ]; then
+  BIND="$(cd "$ENGINE_DIR/../bindings" 2>/dev/null && pwd || true)"
+  if [ -n "${BIND:-}" ] && [ -f "$BIND/commit-milestone.sh" ]; then
+    bash "$BIND/commit-milestone.sh" "$(dirname "$STATE_DIR")" "$STATE_DIR" >/dev/null 2>&1 || true
+  fi
+fi
+exit "$RC"
 # flock 在 fd 9 关闭（脚本退出）时自动释放。

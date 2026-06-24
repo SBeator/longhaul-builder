@@ -75,6 +75,30 @@ ok "重建了 INDEX.md 结构化列表(最新置顶)" "1" \
 ok "report-doc 仍是别名(复用同目录不新建序号)" "1" \
    "$(LONGHAUL_NO_PUBLISH=1 bash "$LHB" report-doc "$P6" >/dev/null 2>&1; [ "$(ls -d "$P6/docs/iterations/"[0-9][0-9]-* 2>/dev/null | wc -l)" = "1" ] && echo 1 || echo 0)"
 
+echo "[T7] 自动 commit：每个 DONE milestone 的改动被自动提交（commit-milestone 绑定）"
+P7="$(mk)"; SD7="$P7/.longhaul"
+git -C "$P7" config user.email "t@local" >/dev/null 2>&1; git -C "$P7" config user.name "t" >/dev/null 2>&1
+echo "print('feature')" > "$P7/feature.py"
+"$PY" - "$SD7" <<'PYIN'
+import sys, json, os
+p = os.path.join(sys.argv[1], "milestones.json"); d = json.load(open(p))
+d["milestones"][0]["status"] = "DONE"
+json.dump(d, open(p, "w"))
+PYIN
+bash "$ROOT/bindings/commit-milestone.sh" "$P7" "$SD7" >/dev/null 2>&1
+ok "DONE milestone 产生 'milestone M1' 提交" "1" "$(git -C "$P7" log --oneline 2>/dev/null | grep -q 'milestone M1' && echo 1 || echo 0)"
+ok "改动文件 feature.py 进了提交" "1" "$(git -C "$P7" log -1 --name-only 2>/dev/null | grep -q 'feature.py' && echo 1 || echo 0)"
+ok ".longhaul 未进代码提交(历史干净)" "0" "$(git -C "$P7" log -1 --name-only 2>/dev/null | grep -q '.longhaul/' && echo 1 || echo 0)"
+ok "committed.json 记账了 M1" "1" "$(grep -q 'M1' "$SD7/committed.json" 2>/dev/null && echo 1 || echo 0)"
+N1="$(git -C "$P7" rev-list --count HEAD 2>/dev/null)"
+bash "$ROOT/bindings/commit-milestone.sh" "$P7" "$SD7" >/dev/null 2>&1
+ok "再跑不重复提交(幂等)" "$N1" "$(git -C "$P7" rev-list --count HEAD 2>/dev/null)"
+PNG="$(mktemp -d)"; mkdir -p "$PNG/.longhaul"; printf '{"milestones":[{"id":"X","status":"DONE"}]}' > "$PNG/.longhaul/milestones.json"
+bash "$ROOT/bindings/commit-milestone.sh" "$PNG" "$PNG/.longhaul" >/dev/null 2>&1
+ok "非 git 仓 graceful 跳过(exit 0)" "0" "$?"
+ok "LONGHAUL_AUTOCOMMIT=0 时 loop.sh 不调自动 commit" "1" \
+   "$(grep -q 'LONGHAUL_AUTOCOMMIT' "$ENG/loop.sh" && echo 1 || echo 0)"
+
 echo ""
 echo "smoke_lhb：$PASS 绿 / $FAIL 红"
 [ "$FAIL" = 0 ]
