@@ -59,6 +59,9 @@ def main():
     check("§1 背景 给出 N/N + 历时", "2 / 2" in md and "历时" in md)
     check("§2 阶段性进展 是 markdown 表格", "2 · 阶段性进展" in md and "| 步 |" in md and "|---|" in md)
     check("§2 表格列出 M1/M2 + 状态", "`M1`" in md and "`M2`" in md and "✅" in md)
+    _tbl = md.split("## 2 · 阶段性进展")[1].split("## 3")[0]
+    check("§2 做了什么取冒号前清楚标题、不堆全文、不留 … 截断",
+          "前端页面" in _tbl and "整页交互重做" not in _tbl and "…" not in _tbl)
     check("§2 表格备注标出 M2 折腾（超时/返工）", "超时" in md and ("返工" in md or "驳回" in md))
     check("§3 耗时 含交互甘特占位 + 文字兜底", "3 · 耗时" in md and reportdoc._GANTT_MARK in md and "时间线" in md)
     check("§4 复盘 两维度(框架/项目)", "4 · 总结与复盘" in md and "4a · 框架流程" in md and "4b · 项目本身" in md)

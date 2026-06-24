@@ -65,6 +65,16 @@ def _clip(s, n=40):
     return s if len(s) <= n else s[:n] + "…"
 
 
+def _did(goal):
+    """「做了什么」清楚标题：取 goal 的首个分句（冒号/句号前），完整不用 … 截断。
+
+    milestone 的 goal 多是「清楚标题：一大段验收细节」，标题就是这步干了啥的干净说法；
+    不截断成「首页·驾驶舱总览：#home-kpis 4 …」这种看不懂的半句。"""
+    g = (goal or "").replace("\n", " ").strip()
+    cuts = [g.find(s) for s in ("：", ":", "。") if g.find(s) > 2]
+    return g[:min(cuts)].strip() if cuts else g
+
+
 def _signals(state_dir):
     """从证据抽运行信号（给复盘用）。复用 gantt.extract 的逐步耗时 + 失败时间线。"""
     g = gantt.extract(state_dir) or {"rows": [], "bars": [], "marks": []}
@@ -122,7 +132,7 @@ def build_progress_table(state_dir):
         else:
             note = "顺利" if m.get("status") == "DONE" else ""
         out.append("| `%s` | %s | %s | %s | %s |" % (
-            mid, _clip(m.get("goal", ""), 34), st, timing, note))
+            mid, _did(m.get("goal", "")), st, timing, note))
     return "\n".join(out)
 
 
