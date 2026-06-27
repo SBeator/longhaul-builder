@@ -49,7 +49,11 @@ import review   # noqa: E402  可配置 AI 判官适配器
 
 DEFAULT_MAX_INFRA_RETRIES = 5
 DEFAULT_MAX_REPLANS = 5
-DEFAULT_DRIVER_TIMEOUT = int(os.environ.get("LONGHAUL_DRIVER_TIMEOUT", "600"))
+# #1：driver 超时改为「进度感知」。DRIVER_TIMEOUT 现在是**兜底天花板**（慢但在产出的不撞它）；
+# 真正的判死靠 STUCK_TIMEOUT（既无文件改动又无输出多久＝卡死）。天花板默认调宽到 1h，
+# 卡死窗默认 10min。探针/判官仍是硬墙短超时。
+DEFAULT_DRIVER_TIMEOUT = int(os.environ.get("LONGHAUL_DRIVER_TIMEOUT", "3600"))
+DEFAULT_DRIVER_STUCK_TIMEOUT = int(os.environ.get("LONGHAUL_DRIVER_STUCK_TIMEOUT", "600"))
 DEFAULT_PROBE_TIMEOUT = int(os.environ.get("LONGHAUL_PROBE_TIMEOUT", "600"))
 DEFAULT_REVIEW_TIMEOUT = int(os.environ.get("LONGHAUL_REVIEW_TIMEOUT", "600"))
 
@@ -170,7 +174,8 @@ def _run_state(state_dir, verb, mid, **kw):
 
 # ---- driver 调用（可配置命令 + 模板占位 + 复用 verify._run_cmd）--------------
 
-def invoke_driver(driver_cmd, prompt_text, state_dir, mid, mode, timeout, dry_run=False):
+def invoke_driver(driver_cmd, prompt_text, state_dir, mid, mode, timeout, dry_run=False,
+                  stuck_timeout=None):
     """渲好的 prompt 写临时文件 → 替换占位 → 复用 verify._run_cmd 跑。返回 (RC_OK|RC_INFRA, reason)。
 
     占位：{prompt_file}/{state_dir}/{milestone_id}/{mode}（F1 carry-forward：mode 显式传）。
@@ -198,11 +203,17 @@ def invoke_driver(driver_cmd, prompt_text, state_dir, mid, mode, timeout, dry_ru
         if dry_run:
             return RC_OK, "DRY-RUN would run driver: %s" % cmd
 
+        proj_dir = os.path.dirname(os.path.abspath(state_dir))
         exit_code, raw, timed_out, _dur = verify._run_cmd(
-            cmd, use_shell=True, cwd=os.path.dirname(os.path.abspath(state_dir)),
-            env=None, timeout=timeout, max_bytes=verify.DEFAULT_MAX_BYTES)
+            cmd, use_shell=True, cwd=proj_dir,
+            env=None, timeout=timeout, max_bytes=verify.DEFAULT_MAX_BYTES,
+            stuck_timeout=stuck_timeout, progress_dir=proj_dir if stuck_timeout else None)
         if timed_out:
-            return RC_INFRA, "driver timed out after %ss" % timeout
+            # #1：区分「卡死被早杀」(无文件/输出进展) 与「撞兜底天花板」——前者下次靠 _resume_note 喂 diff 续跑。
+            if stuck_timeout and _dur is not None and _dur < timeout * 1000 * 0.9:
+                return RC_INFRA, ("driver stuck: 无文件改动也无输出 %ss（已杀，下次喂 diff 续跑）"
+                                  % stuck_timeout)
+            return RC_INFRA, "driver timed out after %ss（撞兜底天花板）" % timeout
         if exit_code is None:
             return RC_INFRA, "driver command not found / not executable"
         if exit_code != 0:
@@ -616,7 +627,9 @@ def _phase_plan(state_dir, m, opts):
     (rc, _reason), _ = _timed(state_dir, mid, "plan", "driver",
                               lambda: invoke_driver(resolve_driver_cmd(opts["driver_cmd"], phase="plan"),
                                                     prompt, state_dir, mid,
-                                                    "plan-only", opts["driver_timeout"]))
+                                                    "plan-only", opts["driver_timeout"],
+                                                    stuck_timeout=opts.get("driver_stuck_timeout",
+                                                                           DEFAULT_DRIVER_STUCK_TIMEOUT)))
     if rc == RC_INFRA:
         return infra_retry(state_dir, mid, "driver(plan) infra: %s" % _reason,
                            opts["max_infra_retries"], "plan")
@@ -666,7 +679,9 @@ def _phase_impl(state_dir, m, opts):
     (rc, _reason), _ = _timed(state_dir, mid, "impl", "driver",
                               lambda: invoke_driver(resolve_driver_cmd(opts["driver_cmd"], phase="impl"),
                                                     prompt, state_dir, mid,
-                                                    "implement", opts["driver_timeout"]))
+                                                    "implement", opts["driver_timeout"],
+                                                    stuck_timeout=opts.get("driver_stuck_timeout",
+                                                                           DEFAULT_DRIVER_STUCK_TIMEOUT)))
     if rc == RC_INFRA:
         return infra_retry(state_dir, mid, "driver(impl) infra: %s" % _reason,
                            opts["max_infra_retries"], "impl")
@@ -1228,6 +1243,7 @@ def _opts_from_args(args):
         "driver_cmd": getattr(args, "driver_cmd", None),  # 原始显式；分阶段解析在调用点(resolve_driver_cmd phase=)
         "judge_cmd": getattr(args, "judge_cmd", None),  # review.resolve_judge_cmd 处理 env/默认/分阶段(kind=)
         "driver_timeout": getattr(args, "driver_timeout", DEFAULT_DRIVER_TIMEOUT),
+        "driver_stuck_timeout": getattr(args, "driver_stuck_timeout", DEFAULT_DRIVER_STUCK_TIMEOUT),
         "probe_timeout": getattr(args, "probe_timeout", DEFAULT_PROBE_TIMEOUT),
         "review_timeout": getattr(args, "review_timeout", DEFAULT_REVIEW_TIMEOUT),
         "max_infra_retries": getattr(args, "max_infra_retries", DEFAULT_MAX_INFRA_RETRIES),
@@ -1281,7 +1297,10 @@ def main(argv=None):
                    help="driver 命令模板（{prompt_file}/{state_dir}/{milestone_id}/{mode}）；"
                         "优先级 > $LONGHAUL_DRIVER_CMD > 空哨兵默认")
     t.add_argument("--judge-cmd", default=None, help="judge 命令模板（透传 review.py）")
-    t.add_argument("--driver-timeout", type=int, default=DEFAULT_DRIVER_TIMEOUT)
+    t.add_argument("--driver-timeout", type=int, default=DEFAULT_DRIVER_TIMEOUT,
+                   help="driver 兜底天花板秒（进度感知后这是上限，非硬墙）")
+    t.add_argument("--driver-stuck-timeout", type=int, default=DEFAULT_DRIVER_STUCK_TIMEOUT,
+                   help="driver 卡死窗秒：既无文件改动也无输出多久判死（慢但在产出不杀）")
     t.add_argument("--probe-timeout", type=int, default=DEFAULT_PROBE_TIMEOUT)
     t.add_argument("--review-timeout", type=int, default=DEFAULT_REVIEW_TIMEOUT)
     t.add_argument("--max-infra-retries", type=int, default=DEFAULT_MAX_INFRA_RETRIES)

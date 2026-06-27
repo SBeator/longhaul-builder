@@ -28,6 +28,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 # 复用 state.py 的 append_event/_now（events.jsonl 单文件，inline 会让格式漂移；门1 已裁定 import）。
@@ -36,6 +37,92 @@ import state  # noqa: E402
 
 DEFAULT_TIMEOUT = 600
 DEFAULT_MAX_BYTES = 1_000_000
+
+#: #1 进度感知超时（卡死检测）：driver 长跑不再用"硬墙超时"——只在「既无文件改动又无输出」
+#: 持续 stuck_timeout 秒才判死（慢但在产出的不杀），跑满 ceiling 秒才撞兜底天花板。
+_POLL_INTERVAL = 20
+_PRUNE_DIRS = {".git", ".longhaul", "node_modules", ".next", "dist", "build",
+               "__pycache__", ".venv", "venv", ".turbo", "target", ".cache"}
+
+
+def _killpg(proc):
+    """超时/卡死真杀整个进程组（含 --shell 拉起的孙子进程），不留孤儿。"""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _max_mtime(root):
+    """工作区最近文件改动时间（wall mtime；剪掉 .git/.longhaul/node_modules 等重/无关目录）。"""
+    latest = 0.0
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in _PRUNE_DIRS and not d.startswith(".longhaul")]
+            for fn in filenames:
+                try:
+                    m = os.stat(os.path.join(dirpath, fn)).st_mtime
+                    if m > latest:
+                        latest = m
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return latest
+
+
+def _wait_with_stuck_detection(proc, ceiling, stuck_timeout, progress_dir, max_bytes):
+    """进度感知等待：边跑边看「文件改动 + 输出」两路进展信号。
+
+    无任何进展持续 stuck_timeout 秒 → 卡死，杀；跑满 ceiling 秒 → 兜底天花板，杀。
+    返回 (out_bytes, exit_code|None, timed_out)。慢但在持续产出的 driver 不会被误杀
+    （修最初"硬墙 1500s 把还在写代码的 driver 也杀掉"的白烧，#1）。
+    """
+    chunks, last_out = [], [time.monotonic()]
+
+    def _drain():
+        try:
+            for line in iter(proc.stdout.readline, b""):
+                chunks.append(line)
+                last_out[0] = time.monotonic()
+        except Exception:
+            pass
+
+    reader = threading.Thread(target=_drain, daemon=True)
+    reader.start()
+    t0 = time.monotonic()
+    last_file_m = _max_mtime(progress_dir)
+    last_progress = t0
+    poll = max(1, min(_POLL_INTERVAL, stuck_timeout, ceiling))
+    timed_out = False
+    while True:
+        try:
+            proc.wait(timeout=poll)
+            break                                   # driver 自己结束了
+        except subprocess.TimeoutExpired:
+            pass
+        now = time.monotonic()
+        cur = _max_mtime(progress_dir)
+        if cur > last_file_m:                        # 有文件改动 = 在产出
+            last_file_m = cur
+            last_progress = now
+        progress = max(last_progress, last_out[0])   # 文件 或 输出 任一路有动静都算进展
+        if now - progress >= stuck_timeout:
+            timed_out = True
+            _killpg(proc)
+            break                                    # 卡死：既无文件改动也无输出
+        if now - t0 >= ceiling:
+            timed_out = True
+            _killpg(proc)
+            break                                    # 兜底天花板（防"一直碰文件但永不收敛"）
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+    reader.join(timeout=5)
+    out = b"".join(chunks)
+    exit_code = None if timed_out else proc.returncode
+    return out, exit_code, timed_out
 
 
 # ---- 裁定纯函数（反作弊根）-------------------------------------------------
@@ -54,7 +141,8 @@ def _decide(exit_code, timed_out: bool) -> str:
 
 # ---- 跑探针：捕获真实输出 + 超时真杀进程组 ----------------------------------
 
-def _run_cmd(argv_or_str, use_shell: bool, cwd: str, env, timeout, max_bytes):
+def _run_cmd(argv_or_str, use_shell: bool, cwd: str, env, timeout, max_bytes,
+             stuck_timeout=None, progress_dir=None):
     """跑一个命令，返回 (exit_code|None, raw_bytes, timed_out, duration_ms)。**共享给 review.py 复用。**
 
     超时真杀**进程组**（门1 REQUIRED_CHANGE）：不依赖 subprocess.run(timeout=)（只杀直接子进程、
@@ -88,21 +176,24 @@ def _run_cmd(argv_or_str, use_shell: bool, cwd: str, env, timeout, max_bytes):
         return None, b"", False, duration_ms
 
     timed_out = False
-    try:
-        out, _ = proc.communicate(timeout=timeout)
-        exit_code = proc.returncode
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        # 真杀整个进程组（含 shell 拉起的孙子进程），再 drain 已产出的 partial output。
+    if stuck_timeout and progress_dir:
+        # #1：driver 长跑走「进度感知」——慢但在产出不杀，只杀真卡死 / 撞兜底天花板。
+        out, exit_code, timed_out = _wait_with_stuck_detection(
+            proc, timeout, stuck_timeout, progress_dir, max_bytes)
+    else:
+        # 探针/判官等短命令：保持硬墙超时（确定性、短，不需要进度感知）。
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-        try:
-            out, _ = proc.communicate(timeout=5)
+            out, _ = proc.communicate(timeout=timeout)
+            exit_code = proc.returncode
         except subprocess.TimeoutExpired:
-            out = b""
-        exit_code = None  # 超时 = 无有效退出码
+            timed_out = True
+            # 真杀整个进程组（含 shell 拉起的孙子进程），再 drain 已产出的 partial output。
+            _killpg(proc)
+            try:
+                out, _ = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                out = b""
+            exit_code = None  # 超时 = 无有效退出码
 
     duration_ms = int((time.monotonic() - t0) * 1000)
     raw = out or b""

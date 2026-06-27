@@ -52,6 +52,7 @@ lhb agents myproj --driver codex  --judge claude   # 或反过来
 - 缺省（没 `lhb agents` 过）：**执行 Claude + 审查 Codex**（异构互审；codex 没装则审查退回 claude）。
 - 换模型：`LONGHAUL_CLAUDE_MODEL` / `LONGHAUL_CODEX_MODEL`。临时换某次：直接覆盖 `LONGHAUL_DRIVER_CMD`/`LONGHAUL_JUDGE_CMD`。
 - 分阶段配不同 agent（#10a）：在通用槽之上按阶段覆盖——`LONGHAUL_DRIVER_CMD__plan` / `__impl`、`LONGHAUL_JUDGE_CMD__plan_review` / `__impl_review`（分阶段槽最优先，没配回落通用槽，向后兼容）。
+- driver 超时是「进度感知」的（#1）：慢但在持续产出（写文件或有输出）的 driver 不会被杀，只在「既无文件改动又无输出」`LONGHAUL_DRIVER_STUCK_TIMEOUT` 秒（默认 600）才判卡死、杀掉续跑；`LONGHAUL_DRIVER_TIMEOUT`（默认 3600）退化为兜底天花板。探针/判官仍是硬墙短超时。
 - 自驱时在 done/blocked 主动推通知：`export LONGHAUL_NOTIFY_CMD="bash <root>/bindings/notify.sh {event} {message} {state_dir}"`（在 notify.sh 里接你自己的渠道：webhook / 自定义发送脚本 / 默认写 notify.log）。
 
 ## 5. 心智模型（为什么这么设计）

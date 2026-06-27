@@ -52,6 +52,7 @@ lhb agents myproj --driver codex  --judge claude   # or the other way around
 - Default (if you never ran `lhb agents`): **Claude executes + Codex reviews** (heterogeneous cross-review; if codex isn't installed, review falls back to claude).
 - Switch models: `LONGHAUL_CLAUDE_MODEL` / `LONGHAUL_CODEX_MODEL`. To override just one run: override `LONGHAUL_DRIVER_CMD`/`LONGHAUL_JUDGE_CMD` directly.
 - Per-stage agents (#10a): on top of the generic slots, override per stage — `LONGHAUL_DRIVER_CMD__plan` / `__impl`, `LONGHAUL_JUDGE_CMD__plan_review` / `__impl_review` (per-stage slot wins, falls back to the generic slot, fully backward-compatible).
+- Driver timeout is progress-aware (#1): a slow-but-progressing driver (writing files or producing output) is never killed; it's killed only when there's no file change AND no output for `LONGHAUL_DRIVER_STUCK_TIMEOUT` seconds (default 600), then resumes from the on-disk diff. `LONGHAUL_DRIVER_TIMEOUT` (default 3600) becomes a backstop ceiling. Probes/judges keep their hard short timeout.
 - Proactively push notifications on done/blocked while self-driving: `export LONGHAUL_NOTIFY_CMD="bash <root>/bindings/notify.sh {event} {message} {state_dir}"` (wire your own channel inside notify.sh: webhook / a custom send script / or it writes to notify.log by default).
 
 ## 5. Mental model (why it's designed this way)
