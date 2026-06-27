@@ -166,6 +166,21 @@ case "$cmd" in
     echo "✓ 建好 $PROJ ｜ spec 骨架 $SD/spec.md ｜ AGENTS.md 入口 + docs/iterations/INDEX.md 已生成"
     echo "  下一步：把 spec.md 的需求/验收标准填清（agent 跟人聊定），再 lhb plan + lhb confirm"
     ;;
+  spec-converge)
+    # Part2：spec 双 agent 收敛——Claude 主笔改 / Codex 审，循环到一致或撞轮次上限（默认 3 → 升级给人）。
+    # 调用方（技能层）先把 spec 初稿写好、背景写进 <sd>/p0-context.md，再调它；结果含"讨论了几轮"。
+    PROJ="${1:?usage: lhb spec-converge <dir> [--max-rounds N]}"; shift || true
+    SD="$(sd_of "$PROJ")"; ART="$SD/spec.md"; CTX="$SD/p0-context.md"
+    MR=3; while [ $# -gt 0 ]; do case "$1" in --max-rounds) MR="${2:?}"; shift 2;; *) shift;; esac; done
+    [ -f "$ART" ] || die "没找到 $ART（先 lhb new + 起草 spec 初稿，再 spec-converge）"
+    # 不能用 ${VAR:-默认}——默认值里 {artifact} 的 '}' 会提前闭合参数展开、截断模板（同 default_bindings 的坑）。
+    PROPOSER="${LONGHAUL_SPEC_PROPOSER_CMD:-}"
+    if [ -z "$PROPOSER" ]; then PROPOSER="bash $BIND/claude-spec-revise.sh {artifact} {feedback} {context}"; fi
+    REVIEWER="${LONGHAUL_SPEC_REVIEWER_CMD:-}"
+    if [ -z "$REVIEWER" ]; then REVIEWER="bash $BIND/codex-spec-review.sh {artifact} {context}"; fi
+    "$PY" "$ENG/converge.py" "$ART" --proposer-cmd "$PROPOSER" --reviewer-cmd "$REVIEWER" \
+      --max-rounds "$MR" --context "$CTX" --out-json "$SD/spec-converge.json"
+    ;;
   plan)
     PROJ="${1:?usage: lhb plan <dir>}"; SD="$(sd_of "$PROJ")"
     "$PY" "$ENG/plan.py" "$SD/spec.md" -o "$SD/milestones.json" >/dev/null 2>&1 \

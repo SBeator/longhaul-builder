@@ -109,6 +109,18 @@ ok "审实施 impl_review=claude" "1" "$(grep -q "JUDGE_CMD__impl_review=.*claud
 PB="$(mktemp -d)"; mkdir -p "$PB/.longhaul"; bash "$LHB" agents "$PB" --impl claude >/dev/null 2>&1
 ok "单阶段覆盖 --impl claude 生效" "1" "$(grep -q "DRIVER_CMD__impl=.*claude-driver" "$PB/.longhaul/agents.env" && echo 1 || echo 0)"
 
+echo "[T9] spec-converge：spec 双 agent 收敛（stub proposer/reviewer，不调真 agent）"
+PS="$(mktemp -d)"; mkdir -p "$PS/.longhaul"; echo "# spec draft" > "$PS/.longhaul/spec.md"; echo "需求背景" > "$PS/.longhaul/p0-context.md"
+O1="$(LONGHAUL_SPEC_REVIEWER_CMD='printf "VERDICT: APPROVE\n"' LONGHAUL_SPEC_PROPOSER_CMD='true' bash "$LHB" spec-converge "$PS" 2>&1)"
+ok "spec-converge 一审即过 → converged"      "1" "$(echo "$O1" | grep -q '"converged": true' && echo 1 || echo 0)"
+ok "spec-converge 落结果 json（含轮数）"      "1" "$(grep -q '"rounds"' "$PS/.longhaul/spec-converge.json" 2>/dev/null && echo 1 || echo 0)"
+RV="$(mktemp)"; printf '#!/usr/bin/env bash\ngrep -q OKAY "$1" && printf "VERDICT: APPROVE\\n" || { printf "VERDICT: REVISE\\n"; printf "REASON: 加 OKAY\\n"; }\n' > "$RV"
+PP="$(mktemp)"; printf '#!/usr/bin/env bash\necho OKAY >> "$1"\n' > "$PP"; chmod +x "$RV" "$PP"
+PS2="$(mktemp -d)"; mkdir -p "$PS2/.longhaul"; echo "draft" > "$PS2/.longhaul/spec.md"; : > "$PS2/.longhaul/p0-context.md"
+O2="$(LONGHAUL_SPEC_REVIEWER_CMD="bash $RV {artifact}" LONGHAUL_SPEC_PROPOSER_CMD="bash $PP {artifact}" bash "$LHB" spec-converge "$PS2" 2>&1)"
+ok "spec-converge 改一轮后过 → rounds=2"      "1" "$(echo "$O2" | grep -q '\"rounds\": 2' && echo 1 || echo 0)"
+ok "spec-converge proposer 真就地改了 spec"   "1" "$(grep -q OKAY "$PS2/.longhaul/spec.md" && echo 1 || echo 0)"
+
 echo ""
 echo "smoke_lhb：$PASS 绿 / $FAIL 红"
 [ "$FAIL" = 0 ]
