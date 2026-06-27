@@ -89,6 +89,15 @@ def main():
     idx3 = open(os.path.join(itd, "INDEX.md"), encoding="utf-8").read()
     check("INDEX 两条都在 + 02 置顶为最新", "| 02 |" in idx3 and "| 01 |" in idx3 and idx3.index("⭐ 最新") < idx3.index("第二轮"))
 
+    # _overall_status：SKIPPED 是终态——被 split 替换的 milestone 留 SKIPPED 不该把整体卡在「进行中」
+    # （对齐 loop 的真实完成语义：state._next_todo 只挑 TODO/IN_PROGRESS，SKIPPED 早被忽略）
+    S = lambda *sts: [{"id": "x%d" % i, "status": s} for i, s in enumerate(sts)]
+    check("overall:全 DONE → ✅ 完成", iterations._overall_status(S("DONE", "DONE")) == "✅ 完成")
+    check("overall:DONE+SKIPPED(被拆分) → ✅ 完成(不卡进行中)",
+          iterations._overall_status(S("DONE", "DONE", "SKIPPED")) == "✅ 完成")
+    check("overall:还有 TODO → 不算完成", iterations._overall_status(S("DONE", "TODO")) != "✅ 完成")
+    check("overall:全 SKIPPED(无任何 DONE) → 不算完成", iterations._overall_status(S("SKIPPED")) != "✅ 完成")
+
     npass = sum(1 for r in _rows if r)
     print("\n文档收敛(迭代归档+INDEX)：%d/%d 绿" % (npass, len(_rows)))
     return 0 if npass == len(_rows) else 1

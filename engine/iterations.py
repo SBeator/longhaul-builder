@@ -68,7 +68,10 @@ def next_ordinal(itd):
 
 
 def _overall_status(ms):
-    if ms and all(m.get("status") == "DONE" for m in ms):
+    # SKIPPED 是终态（被拆分替换/有意跳过），不是待办——只要其余都 DONE 且至少有一个 DONE 即算完成，
+    # 否则一个被 split 的 milestone(留 SKIPPED 审计) 会永远把整体卡在「进行中」。
+    if ms and all(m.get("status") in ("DONE", "SKIPPED") for m in ms) \
+            and any(m.get("status") == "DONE" for m in ms):
         return "✅ 完成"
     sts = {m.get("status") for m in ms}
     for key, lbl in _OVERALL:
