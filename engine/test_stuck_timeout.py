@@ -78,6 +78,15 @@ def main():
                                         "p", sd, "M1", "implement", timeout=3, stuck_timeout=30)
     check("reason:撞天花板→RC_INFRA + 含『天花板』", rc_c == loop.RC_INFRA and "天花板" in reason_c)
 
+    # #13：driver 非零退出 → reason 带末尾输出摘要 + 落 evidence（不再黑盒）
+    pd6 = tempfile.mkdtemp(prefix="lhb-diag-"); sd6 = os.path.join(pd6, ".longhaul"); os.makedirs(sd6, exist_ok=True)
+    rc_d, reason_d = loop.invoke_driver("echo BOOM_diag_line; exit 7", "p", sd6, "M1", "implement", timeout=10)
+    check("#13 非零退出→RC_INFRA + reason 带退出码与末尾摘要",
+          rc_d == loop.RC_INFRA and "exited 7" in reason_d and ("BOOM_diag_line" in reason_d or "末尾" in reason_d))
+    check("#13 落了 driver-nonzero-exit.txt 证据(含末尾输出)",
+          os.path.exists(os.path.join(sd6, "evidence", "M1", "driver-nonzero-exit.txt"))
+          and "BOOM_diag_line" in open(os.path.join(sd6, "evidence", "M1", "driver-nonzero-exit.txt"), encoding="utf-8").read())
+
     npass = sum(1 for r in _rows if r)
     print("\n进度感知超时(#1 卡死检测)：%d/%d 绿" % (npass, len(_rows)))
     return 0 if npass == len(_rows) else 1

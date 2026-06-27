@@ -188,6 +188,32 @@ def _run_state(state_dir, verb, mid, **kw):
 
 # ---- driver 调用（可配置命令 + 模板占位 + 复用 verify._run_cmd）--------------
 
+def _capture_driver_diag(state_dir, mid, mode, exit_code, raw):
+    """#13：driver 非零退出 → 末尾输出落 `evidence/<mid>/driver-nonzero-exit.txt` + 返回一句话摘要供 reason。
+
+    让"driver exited 1"不再是黑盒：build-3 里 AC1 连 5 次 exited-1 才熔断、却看不到为啥；有了这个，
+    连续非零退出的 reason 直接带末尾报错（command not found / ModuleNotFound / permission denied…），
+    熔断升级时人一眼能定位是环境还是命令问题。
+    """
+    s = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else (raw or "")
+    tail = s[-2000:].strip()
+    try:
+        ev = os.path.join(state_dir, "evidence", mid)
+        os.makedirs(ev, exist_ok=True)
+        with open(os.path.join(ev, "driver-nonzero-exit.txt"), "w", encoding="utf-8") as f:
+            f.write("mode=%s exit_code=%s\n\n--- driver 末尾输出 ---\n%s\n" % (mode, exit_code, tail))
+    except OSError:
+        pass
+    last = ""
+    for ln in reversed(tail.splitlines()):
+        if ln.strip():
+            last = ln.strip()[:160]
+            break
+    if last:
+        return "；末尾：%s（详见 evidence/%s/driver-nonzero-exit.txt）" % (last, mid)
+    return "（无输出，见 evidence/%s/driver-nonzero-exit.txt）" % mid
+
+
 def invoke_driver(driver_cmd, prompt_text, state_dir, mid, mode, timeout, dry_run=False,
                   stuck_timeout=None):
     """渲好的 prompt 写临时文件 → 替换占位 → 复用 verify._run_cmd 跑。返回 (RC_OK|RC_INFRA, reason)。
@@ -239,7 +265,9 @@ def invoke_driver(driver_cmd, prompt_text, state_dir, mid, mode, timeout, dry_ru
             return RC_INFRA, "driver command not found / not executable"
         if exit_code != 0:
             # 非零退出 = driver 没正常跑完（崩/127/2）→ 基建路径（不烧 attempt）。
-            return RC_INFRA, "driver exited %s (non-zero)" % exit_code
+            # #13：把末尾输出落证据 + 摘进 reason，让"driver exited N"不再黑盒——连续非零退出能直接查根因。
+            return RC_INFRA, "driver exited %s (non-zero)%s" % (
+                exit_code, _capture_driver_diag(state_dir, mid, mode, exit_code, raw))
         return RC_OK, "driver exit 0"
     finally:
         try:
