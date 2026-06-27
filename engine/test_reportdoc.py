@@ -53,6 +53,13 @@ def _write_synth_events(sd):
                             "reason": "driver(impl) infra: driver timed out after 600s"}) + "\n")
         f.write(json.dumps({"ts": "2026-06-24T00:25:00Z", "ev": "fail", "milestone": "M2",
                             "error": "判官 REVISE：表单提交没真落库", "attempt": 1}) + "\n")
+        # #11 token 记账事件：M1 小、M2 大（driver + judge 各记一笔）
+        f.write(json.dumps({"ts": "2026-06-24T00:00:11Z", "ev": "token_usage", "milestone": "M1",
+                            "phase": "implement", "role": "driver", "tokens_in": 800, "tokens_out": 400}) + "\n")
+        f.write(json.dumps({"ts": "2026-06-24T00:03:01Z", "ev": "token_usage", "milestone": "M1",
+                            "phase": "impl_review", "role": "judge", "tokens_in": 300, "tokens_out": 100}) + "\n")
+        f.write(json.dumps({"ts": "2026-06-24T00:20:01Z", "ev": "token_usage", "milestone": "M2",
+                            "phase": "implement", "role": "driver", "tokens_in": 9000, "tokens_out": 4000}) + "\n")
     return sd
 
 
@@ -93,6 +100,14 @@ def main():
           and "#app" not in _tbl and "data-form" not in _tbl and "…" not in _tbl)
     check("§2 超长详情收尾用「等」不用 …", "等" in _tbl)
     check("§2 表格备注标出 M2 折腾（超时/返工）", "超时" in md and ("返工" in md or "驳回" in md))
+    # #11 token：表格有 token 列 + §4 有 token 结构分析
+    check("§2 表格新增 token 列", "| token |" in md)
+    check("§2 token 列显示用量(M2 大 13k)", "13.0k" in _tbl or "13k" in _tbl)
+    check("§4 token 结构分析(共烧/driver vs 判官/最烧步)",
+          "token 结构" in md and "判官占" in md and "最烧的步" in md)
+    check("#11 _extract_tokens 解析 LHB_TOKENS 标记",
+          __import__("verify")._extract_tokens("noise\nLHB_TOKENS in=123 out=45\nx") == (123, 45))
+    check("#11 _extract_tokens 无标记→(0,0)", __import__("verify")._extract_tokens("nothing") == (0, 0))
     check("§3 耗时 含交互甘特占位 + 文字兜底", "3 · 耗时" in md and reportdoc._GANTT_MARK in md and "时间线" in md)
     check("§4 复盘 两维度(框架/项目)", "4 · 总结与复盘" in md and "4a · 框架流程" in md and "4b · 项目本身" in md)
     check("§4a 框架：一次过 + 超时白跑 + 改进建议", "一次过" in md and "超时白跑" in md and "改进建议（框架级）" in md)
@@ -133,7 +148,7 @@ def main():
     ptbl = reportdoc.build_progress_table(_mk_tricky())
     drows = [ln for ln in ptbl.splitlines() if ln.startswith("| `")]
     npipes = [ln.replace("\\|", "\x00").count("|") for ln in drows]
-    check("#9 表格每行恒 6 列(管道/深冒号不串列)", len(drows) == 3 and all(n == 7 for n in npipes))
+    check("#9 表格每行恒 7 列(管道/深冒号不串列)", len(drows) == 3 and all(n == 8 for n in npipes))
 
     # _one_liner 去 spec 骨架前缀
     d2 = tempfile.mkdtemp(prefix="lhb-one-")

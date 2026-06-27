@@ -6,6 +6,7 @@ PF="${1:?}"; SD="${2:?}"; MID="${3:?}"; MODE="${4:-implement}"
 PROJ="$(cd "$(dirname "$SD")" 2>/dev/null && pwd)" || exit 2
 LOG="${E2E_LOG:-/dev/null}"; ROLE="${E2E_ROLE:-driver}"
 echo "DRIVER role=$ROLE mid=$MID mode=$MODE" >> "$LOG"
+echo "LHB_TOKENS in=600 out=300"   # #11 token 标记
 EVD="$SD/evidence/$MID"; mkdir -p "$EVD"
 # 钩子①走偏：指定 milestone 的 plan 期写 flag.json（验 #2 走偏前移 → NEEDS_CONFIRM）
 if [ "$MODE" = "plan-only" ] && [ "$MID" = "${E2E_DRIFT_MID:-__none__}" ] && [ ! -f "$EVD/.flagged" ]; then

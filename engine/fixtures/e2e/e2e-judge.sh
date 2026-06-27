@@ -6,6 +6,7 @@ PF="${1:?}"; EVD="${2:-}"; LOG="${E2E_LOG:-/dev/null}"; ROLE="${E2E_ROLE:-judge}
 MID="$(basename "$EVD")"
 KIND=impl_review; grep -q "PLAN REVIEW" "$PF" 2>/dev/null && KIND=plan_review
 echo "JUDGE role=$ROLE mid=$MID kind=$KIND" >> "$LOG"
+echo "LHB_TOKENS in=200 out=80"   # #11 token 标记
 if [ "$KIND" = "plan_review" ]; then
   # 钩子③返工：指定 milestone 的 plan_review 首次 REVISE，之后 APPROVE（验返工回 plan 路径）
   if [ "$MID" = "${E2E_REWORK_MID:-__none__}" ] && [ ! -f "$EVD/.reworked" ]; then

@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -43,6 +44,21 @@ DEFAULT_MAX_BYTES = 1_000_000
 _POLL_INTERVAL = 20
 _PRUNE_DIRS = {".git", ".longhaul", "node_modules", ".next", "dist", "build",
                "__pycache__", ".venv", "venv", ".turbo", "target", ".cache"}
+
+
+_TOKENS_RE = re.compile(r"LHB_TOKENS\s+in=(\d+)\s+out=(\d+)")
+
+
+def _extract_tokens(raw):
+    """从 agent 输出里抽 token 用量标记 `LHB_TOKENS in=<n> out=<n>`（取最后一个；无 → (0,0)）。
+
+    #11 token 记账：绑定层（claude/codex）跑完把用量打成这一行，引擎据此记账，agent 无关。
+    """
+    s = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else (raw or "")
+    last = None
+    for m in _TOKENS_RE.finditer(s):
+        last = m
+    return (int(last.group(1)), int(last.group(2))) if last else (0, 0)
 
 
 def _killpg(proc):

@@ -326,6 +326,13 @@ def review(state_dir, milestone_id, kind="impl_review", judge_cmd=None, ctx=None
             cmd, use_shell=True, cwd=os.path.dirname(os.path.abspath(state_dir)),
             env=None, timeout=timeout, max_bytes=max_bytes)
         raw = raw_bytes.decode("utf-8", errors="surrogateescape") if raw_bytes else ""
+        _ti, _to = verify._extract_tokens(raw_bytes)   # #11：记 judge 这步 token 用量
+        if _ti or _to:
+            try:
+                state.append_event(state_dir, "token_usage", milestone=milestone_id, phase=kind,
+                                   role="judge", tokens_in=_ti, tokens_out=_to)
+            except OSError:
+                pass
 
         if timed_out:
             return _persist(state_dir, milestone_id, _result(

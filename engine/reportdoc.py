@@ -65,6 +65,14 @@ def _clip(s, n=40):
     return s if len(s) <= n else s[:n] + "…"
 
 
+def _fmt_tok(n):
+    """token 数紧凑显示：None/0 → 「—」；≥1000 → 「X.Xk」。"""
+    n = int(n or 0)
+    if n <= 0:
+        return "—"
+    return "%.1fk" % (n / 1000) if n >= 1000 else str(n)
+
+
 def _clean_sum(s, limit=80):
     """清洗 + 边界收尾：去技术噪声（#选择器/[属性]/.类名/残留标点），超长在自然断点加「等」（不用 …）。"""
     g = (s or "").replace("\n", " ").strip()
@@ -146,6 +154,16 @@ def _signals(state_dir):
     def of(ev):
         return [e for e in evs if e.get("ev") == ev]
     timeouts = [e for e in evs if e.get("ev") == "infra_retry" and "timed out" in (e.get("reason") or "")]
+    # #11 token 记账：把 token_usage 事件按 milestone / 角色 聚合
+    toks = [e for e in evs if e.get("ev") == "token_usage"]
+    tok_by_mid, tok_drv, tok_jdg = {}, 0, 0
+    for e in toks:
+        t = int(e.get("tokens_in") or 0) + int(e.get("tokens_out") or 0)
+        tok_by_mid[e.get("milestone")] = tok_by_mid.get(e.get("milestone"), 0) + t
+        if e.get("role") == "judge":
+            tok_jdg += t
+        else:
+            tok_drv += t
     rows = g["rows"]
     smooth = [r for r in rows if r["status"] == "DONE" and not r["events"] and r["n_drv"] > 0]
     struggled = sorted([r for r in rows if r["events"]], key=lambda r: -len(r["events"]))
@@ -159,6 +177,8 @@ def _signals(state_dir):
         "reopen": of("reopen_plan"), "reject": of("flag_rejected"), "raised": of("flag_raised"),
         "fail": of("fail"), "break": of("circuit_break"), "recover": of("self_recovery"),
         "split": of("milestone_split"),
+        "tok_by_mid": tok_by_mid, "tok_drv": tok_drv, "tok_jdg": tok_jdg,
+        "tok_total": tok_drv + tok_jdg, "has_tokens": bool(toks),
         "drv_min": round(sum(r["drv_min"] for r in rows), 1),
         "rev_min": round(sum(r["rev_min"] for r in rows), 1),
         "wasted_min": round(sum(b["dur"] for b in g["bars"] if b["cat"] == "timeout") / 60, 1),
@@ -175,7 +195,8 @@ def build_progress_table(state_dir):
     s = _signals(state_dir)
     rows, ms = s["rows"], s["ms"]
     by = {r["mid"]: r for r in rows}
-    out = ["| 步 | 做了什么 | 详情 | 状态 | 出方案/实现/审 | 备注 |", "|---|---|---|---|---|---|"]
+    out = ["| 步 | 做了什么 | 详情 | 状态 | 出方案/实现/审 | token | 备注 |",
+           "|---|---|---|---|---|---|---|"]
     for m in ms:
         mid = m.get("id")
         r = by.get(mid, {})
@@ -195,8 +216,8 @@ def build_progress_table(state_dir):
         else:
             note = "顺利" if m.get("status") == "DONE" else ""
         did, detail = _split_goal(goal)
-        out.append("| `%s` | %s | %s | %s | %s | %s |" % (
-            mid, did, detail, st, timing, _cell(note)))
+        out.append("| `%s` | %s | %s | %s | %s | %s | %s |" % (
+            mid, did, detail, st, timing, _fmt_tok(s["tok_by_mid"].get(mid)), _cell(note)))
     return "\n".join(out)
 
 
@@ -231,6 +252,12 @@ def build_retro(state_dir):
     tot = s["drv_min"] + s["rev_min"]
     if tot > 0:
         out.append("- 时间结构：driver（出方案+实现）**%.0f 分** vs 判官审 **%.0f 分**（审占 %.0f%%）。" % (s["drv_min"], s["rev_min"], 100 * s["rev_min"] / tot))
+    if s.get("has_tokens"):
+        tt = s["tok_total"]
+        jpct = (100 * s["tok_jdg"] / tt) if tt else 0
+        top = max(s["tok_by_mid"].items(), key=lambda x: x[1], default=(None, 0))
+        out.append("- 💸 token 结构：本轮共烧 **%s**（driver %s + 判官 %s，判官占 %.0f%%）；最烧的步 **%s**（%s）。" % (
+            _fmt_tok(tt), _fmt_tok(s["tok_drv"]), _fmt_tok(s["tok_jdg"]), jpct, top[0] or "—", _fmt_tok(top[1])))
     if len(out) and out[-1] != "":
         out.append("")
     out.append("**改进建议（框架级）：**")

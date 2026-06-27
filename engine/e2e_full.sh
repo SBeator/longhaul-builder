@@ -76,6 +76,8 @@ ok "#9 播报带「做了什么」详情"     "1" "$(grep -q '完成 —' "$SD1/
 ok "自动 commit:每 milestone 有提交" "1" "$(git -C "$P1" log --oneline 2>/dev/null | grep -qE 'milestone M1|milestone M2' && echo 1 || echo 0)"
 ok "运行报告归档(report.md + INDEX)" "1" "$([ -f "$(ls -d "$P1"/docs/iterations/*/report.md 2>/dev/null | head -1)" ] && [ -f "$P1/docs/iterations/INDEX.md" ] && echo 1 || echo 0)"
 ok "#9 运行报告 §2 详情列非空"     "1" "$(R="$(ls "$P1"/docs/iterations/*/report.md 2>/dev/null | head -1)"; [ -n "$R" ] && grep -q '做了什么' "$R" && echo 1 || echo 0)"
+ok "#11 token 记账:token_usage 落账" "1" "$(grep -q token_usage "$SD1/events.jsonl" 2>/dev/null && echo 1 || echo 0)"
+ok "#11 运行报告含 token 列 + 分析"  "1" "$(R="$(ls "$P1"/docs/iterations/*/report.md 2>/dev/null | head -1)"; [ -n "$R" ] && grep -q '| token |' "$R" && grep -q 'token 结构' "$R" && echo 1 || echo 0)"
 
 echo "[E2E-4] #2 走偏前移：driver 在 plan 期举旗 → milestone NEEDS_CONFIRM + 播报举旗"
 P4="$(mk_proj drift 1)"; SD4="$P4/.longhaul"; "$LHB" confirm "$P4" --by e2e --force >/dev/null 2>&1

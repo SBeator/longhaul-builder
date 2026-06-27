@@ -222,6 +222,13 @@ def invoke_driver(driver_cmd, prompt_text, state_dir, mid, mode, timeout, dry_ru
             cmd, use_shell=True, cwd=proj_dir,
             env=None, timeout=timeout, max_bytes=verify.DEFAULT_MAX_BYTES,
             stuck_timeout=stuck_timeout, progress_dir=proj_dir if stuck_timeout else None)
+        _ti, _to = verify._extract_tokens(raw)   # #11：记 driver 这步 token 用量（含失败/超时步的浪费）
+        if _ti or _to:
+            try:
+                state.append_event(state_dir, "token_usage", milestone=mid, phase=mode,
+                                   role="driver", tokens_in=_ti, tokens_out=_to)
+            except OSError:
+                pass
         if timed_out:
             # #1：区分「卡死被早杀」(无文件/输出进展) 与「撞兜底天花板」——前者下次靠 _resume_note 喂 diff 续跑。
             if stuck_timeout and _dur is not None and _dur < timeout * 1000 * 0.9:
