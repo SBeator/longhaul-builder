@@ -99,6 +99,15 @@ def main():
         review.resolve_judge_cmd = real_resolve
     check("接线:review() 把 kind 透给 resolve_judge_cmd", seen == ["plan_review"])
 
+    # ---- 5) 测试独立 agent（课题）：resolve_test_cmd 优先级 + test 模板可渲染 ----
+    check("test_cmd:未配→空(不启用=老行为)", loop.resolve_test_cmd(env={}) == "")
+    check("test_cmd:LONGHAUL_TEST_CMD 兜底", loop.resolve_test_cmd(env={"LONGHAUL_TEST_CMD": "T"}) == "T")
+    check("test_cmd:分阶段 __test 最优先",
+          loop.resolve_test_cmd(env={"LONGHAUL_TEST_CMD": "T", "LONGHAUL_DRIVER_CMD__test": "X"}) == "X")
+    import prompts  # noqa: E402
+    check("test 模板可渲染(独立测试 agent)",
+          "独立" in prompts.render({"id": "M1", "goal": "g", "acceptance": {"probe": "p"}}, "test", {}))
+
     npass = sum(1 for r in _rows if r)
     print("\n分阶段可配 agent(#10a)：%d/%d 绿" % (npass, len(_rows)))
     return 0 if npass == len(_rows) else 1

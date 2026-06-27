@@ -119,10 +119,20 @@ LONGHAUL_PLAN_PANEL="$JDG ||| $JDG" bash "$ENG/loop.sh" "$SD7" >/dev/null 2>&1 |
 ok "plan_review 走了 panel 聚合"  "1" "$(grep -q '"panel": true' "$SD7/evidence/M1/review-plan_review.json" 2>/dev/null && echo 1 || echo 0)"
 ok "panel 留了各 panelist 审计文件" "1" "$(ls "$SD7"/evidence/M1/review-plan_review.panel-*.json >/dev/null 2>&1 && echo 1 || echo 0)"
 
+echo "[E2E-8] 测试独立 agent（课题）：配了 test agent → impl 后独立写+跑测试、留证据"
+P8="$(mk_proj testagent 1)"; SD8="$P8/.longhaul"; "$LHB" confirm "$P8" --by e2e --force >/dev/null 2>&1
+export LONGHAUL_TEST_CMD="E2E_ROLE=tester $DRV"
+drive "$SD8" 40 >/dev/null
+unset LONGHAUL_TEST_CMD
+ok "test agent 真跑了(role=tester)"   "1" "$(grep -qE 'role=tester .*mode=test' "$E2E_LOG" && echo 1 || echo 0)"
+ok "test_agent 事件落账"              "1" "$(grep -q test_agent "$SD8/events.jsonl" 2>/dev/null && echo 1 || echo 0)"
+ok "独立测试证据 test-agent.txt 留下"  "1" "$([ -f "$SD8/evidence/M1/test-agent.txt" ] && echo 1 || echo 0)"
+
 echo ""
 echo "========== 覆盖矩阵 =========="
 echo "  ① spec 双 agent 收敛  ② P0 硬门  ③ 全相位循环到 DONE  ④ 分阶段 agent(#10a)"
 echo "  ⑤ plan panel(#10b)  ⑥ 超时卡死检测(#1)  ⑦ 走偏前移举旗(#2)  ⑧ 返工 reopen-plan"
 echo "  ⑨ SKIPPED 终态  ⑩ 播报详情+运行报告(#9)  ⑪ 自动 commit + iterations 归档"
+echo "  ⑫ token 记账(#11)  ⑬ 测试独立 agent(课题)"
 echo "e2e_full：$PASS 绿 / $FAIL 红"
 [ "$FAIL" = 0 ]

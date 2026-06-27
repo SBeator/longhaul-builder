@@ -32,6 +32,9 @@ PEOF
     : > "$PROJ/done_$MID.txt"
     printf '$ test -f %s/done_%s.txt\nEXIT_CODE=0\n' "$PROJ" "$MID" > "$EVD/green.txt"
     ;;
+  test)   # 独立测试 agent（课题）：写一份独立测试证据
+    printf 'independent test agent ran for %s\n$ run acceptance test\nEXIT_CODE=0\n' "$MID" > "$EVD/test-agent.txt"
+    ;;
   *) echo "e2e-driver: bad mode $MODE" >&2; exit 2 ;;
 esac
 exit 0

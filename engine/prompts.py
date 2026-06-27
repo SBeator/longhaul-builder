@@ -22,8 +22,8 @@ import sys
 
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 
-#: 三种合法模板 kind（= prompts/<kind>.md）
-KINDS = ("driver", "plan_review", "impl_review")
+#: 合法模板 kind（= prompts/<kind>.md）。test = 测试独立 agent（课题，可选阶段）。
+KINDS = ("driver", "plan_review", "impl_review", "test")
 
 #: 未提供 key 的占位降级标记（可见，不静默留空）
 UNSET_MARKER = "[[{key}:UNSET]]"

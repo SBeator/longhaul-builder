@@ -114,6 +114,16 @@ def resolve_plan_panel(env=None):
     return [c.strip() for c in raw.split(PLAN_PANEL_DELIM) if c.strip()]
 
 
+def resolve_test_cmd(explicit=None, env=None) -> str:
+    """测试独立 agent（课题）命令解析：`LONGHAUL_DRIVER_CMD__test` > `LONGHAUL_TEST_CMD` > 显式 > 空。
+
+    空 → 不启用（老行为：实现者自己 TDD）。配了就在 impl 之后让一个**独立** agent 写+跑验收测试，
+    与实现者解耦（实现者不能给自己的测试放水）。站在 #10a 分阶段地基上。
+    """
+    env = os.environ if env is None else env
+    return env.get("LONGHAUL_DRIVER_CMD__test") or env.get("LONGHAUL_TEST_CMD") or explicit or ""
+
+
 # ---- cursor 侧 loop 私有账（infra_retries / infra_blocked / replan_count）-----
 # 这几段是 loop 维护的（基建第二维熔断 + replan 软上限），state.py 不碰。
 
@@ -736,9 +746,34 @@ def _phase_impl(state_dir, m, opts):
                            opts["max_infra_retries"], "impl")
     _reset_infra(state_dir, mid)
     _capture_changed_files(state_dir, mid, baseline)  # A 簇：机器捕获"改了哪些文件"
+    _run_test_agent(state_dir, mid, opts)             # 课题：配了独立 test agent 就在实现后独立写+跑测试
     if _detect_and_raise_flag(state_dir, mid):        # D 簇：driver 举旗了？
         return 0  # 已标 NEEDS_CONFIRM + 推进 cursor，跳过 impl_review、非阻塞往后跑、等人确认
     return _run_state(state_dir, "advance-phase", mid, phase="impl")
+
+
+def _run_test_agent(state_dir, mid, opts):
+    """测试独立 agent（课题）：impl 之后、若配了 test agent，让它**独立**写+跑该 milestone 的验收测试、留证据。
+
+    与实现者解耦（实现者不能给自己测试放水）；门2 judge 一并审这份独立测试结果。
+    **非阻塞**：未配置=老行为零改动；test agent infra 失败只记一笔不卡推进（验收仍由 verify 探针 + 门2 把关）。
+    """
+    test_cmd = resolve_test_cmd(opts.get("test_cmd"))
+    if not (test_cmd or "").strip():
+        return
+    m = state._find(state.load_milestones(state_dir), mid)
+    if not m:
+        return
+    prompt = prompts.render(m, "test", _driver_ctx(state_dir, mid, "test"))
+    (rc, reason), _ = _timed(state_dir, mid, "test", "test_agent",
+                             lambda: invoke_driver(test_cmd, prompt, state_dir, mid, "test",
+                                                   opts["driver_timeout"],
+                                                   stuck_timeout=opts.get("driver_stuck_timeout",
+                                                                          DEFAULT_DRIVER_STUCK_TIMEOUT)))
+    try:
+        state.append_event(state_dir, "test_agent", milestone=mid, ok=(rc == RC_OK), reason=reason)
+    except OSError:
+        pass
 
 
 def _phase_impl_review(state_dir, m, opts):
@@ -1301,6 +1336,7 @@ def _opts_from_args(args):
         "driver_cmd": getattr(args, "driver_cmd", None),  # 原始显式；分阶段解析在调用点(resolve_driver_cmd phase=)
         "judge_cmd": getattr(args, "judge_cmd", None),  # review.resolve_judge_cmd 处理 env/默认/分阶段(kind=)
         "plan_panel": resolve_plan_panel(),  # #10b：plan 多 agent panel（≥2 个才生效）
+        "test_cmd": getattr(args, "test_cmd", None),  # 课题：独立测试 agent（env LONGHAUL_TEST_CMD 兜底）
         "driver_timeout": getattr(args, "driver_timeout", DEFAULT_DRIVER_TIMEOUT),
         "driver_stuck_timeout": getattr(args, "driver_stuck_timeout", DEFAULT_DRIVER_STUCK_TIMEOUT),
         "probe_timeout": getattr(args, "probe_timeout", DEFAULT_PROBE_TIMEOUT),
