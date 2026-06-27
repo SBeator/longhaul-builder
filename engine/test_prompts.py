@@ -93,6 +93,9 @@ def main():
     # #2 走偏前移：plan 阶段要把 spec 与真实环境「对账」、不符就 plan 期举旗（治 spec 过时拖到 impl 才炸）
     check("driver(plan) 含 spec-vs-现实对账指令", "对账", True, "对账" in rendered.get("driver", ""))
     check("plan_review 含 spec-vs-现实对账维度", "对账", True, "对账" in rendered.get("plan_review", ""))
+    # #12 颗粒度 sizing：plan 期估体量、太大就主动拆（别等 impl 超时被动拆）
+    check("driver(plan) 含 milestone 体量自检/拆分", "体量", True, "体量" in rendered.get("driver", ""))
+    check("plan_review 含颗粒度/体量维度", "体量", True, "体量" in rendered.get("plan_review", ""))
 
     # ---- 用例 5：未知 kind 抛清晰错误 -----------------------------------
     raised = False
