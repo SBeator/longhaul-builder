@@ -12,11 +12,28 @@ ENGINE_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOCK="$STATE_DIR/.loop.lock"
 PY="${PYTHON:-python3}"
 
-# flock：拿不到锁（上一个 tick 还在跑）就**安静退出 0**——cron 每 N min 唤起、上个没跑完时不重叠、不双写。
-exec 9>"$LOCK"
-if ! flock -n 9; then
-  echo "[loop.sh] another tick holds $LOCK; skip" >&2
-  exit 0
+# 并发互斥：拿不到锁（上一个 tick 还在跑）就**安静退出 0**——cron 每 N min 唤起、上个没跑完时不重叠、不双写。
+# Linux 用 flock（原逻辑零改动）；macOS/BSD 无 flock 时回退到 mkdir 原子锁（带 stale-pid 回收 + 退出清理）。
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$LOCK"
+  if ! flock -n 9; then
+    echo "[loop.sh] another tick holds $LOCK; skip" >&2
+    exit 0
+  fi
+else
+  LOCKDIR="$LOCK.d"
+  if ! mkdir "$LOCKDIR" 2>/dev/null; then
+    _holder="$(cat "$LOCKDIR/pid" 2>/dev/null || true)"
+    if [ -n "${_holder:-}" ] && ! kill -0 "$_holder" 2>/dev/null; then
+      rm -rf "$LOCKDIR" 2>/dev/null || true   # 持有者已死 → 回收 stale 锁
+    fi
+    if ! mkdir "$LOCKDIR" 2>/dev/null; then
+      echo "[loop.sh] another tick holds $LOCK; skip" >&2
+      exit 0
+    fi
+  fi
+  echo "$$" > "$LOCKDIR/pid"
+  trap 'rm -rf "$LOCKDIR" 2>/dev/null || true' EXIT
 fi
 
 # 收口守卫（REQUIRED gate-1）：grep 的是 state.py `next`（loop.py status --next-json 委托它）输出的
