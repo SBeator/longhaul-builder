@@ -92,11 +92,38 @@ def render(state_dir, only=None):
     return "\n".join(lines)
 
 
-def progress_line(state_dir, mid):
-    """item 7 进度播报带时间：一行「<mid> 完成 ｜ 本步耗时(分阶段) ｜ 累计 ｜ 当前时间」。
+def _goal_of(state_dir, mid):
+    """从 milestones.json 取该 milestone 的 goal（缺文件/缺项→空串，播报不崩）。"""
+    try:
+        ms = json.load(open(os.path.join(state_dir, "milestones.json"), encoding="utf-8")).get("milestones", [])
+        return next((m.get("goal", "") for m in ms if m.get("id") == mid), "")
+    except Exception:
+        return ""
 
-    给 bin/lhb 的 notify_progress 用——每个 milestone 完成时播报，让人跑着就看见"哪步多久/到现在多久"，
-    不用事后扒 events.jsonl（修最初的"进度更新不带时间"bug，2026-06-24）。
+
+def _goal_brief(goal, limit=46):
+    """播报用紧凑「做了什么」：去技术噪声(#选择器/[属性]/<占位>)，超长在自然断点收尾加「等」。"""
+    import re
+    g = (goal or "").replace("\n", " ").strip()
+    if not g:
+        return ""
+    g = re.sub(r"#[\w-]+", "", g)
+    g = re.sub(r"\[[^\]]*\]", "", g)
+    g = re.sub(r"<[^>]*>", "", g)
+    g = re.sub(r"\s+", " ", g).strip()
+    if len(g) <= limit:
+        return g
+    head = g[:limit]
+    brk = set("：:+、。；/ ")
+    cut = max((i for i in range(len(head) - 1, int(limit * 0.5), -1) if head[i] in brk), default=limit)
+    return head[:cut].rstrip(" ：:+、。；/") + " 等"
+
+
+def progress_line(state_dir, mid):
+    """item 7 进度播报带时间：一行「<mid> 完成：做了什么 ｜ 本步耗时(分阶段) ｜ 累计 ｜ 当前时间」。
+
+    给 bin/lhb 的 notify_progress 用——每个 milestone 完成时播报，让人跑着就看见"做了啥/哪步多久/到现在多久"，
+    不用事后扒 events.jsonl（修"进度更新不带时间"bug 2026-06-24；补"播报缺详情/做了什么"bug 2026-06-27 #9）。
     """
     import datetime
     d = build(state_dir, only=mid)
@@ -124,8 +151,10 @@ def progress_line(state_dir, mid):
     if review:
         parts.append("审 " + _fmt(review))
     breakdown = "（" + " · ".join(parts) + "）" if parts else ""
-    return "✅ %s 完成 ｜ 本步 %s%s ｜ 累计 %s ｜ %s" % (
-        mid, _fmt(step_total), breakdown, cumulative, now_local)
+    brief = _goal_brief(_goal_of(state_dir, mid))   # #9：播报带「做了什么」详情（最初一直缺，只报 id+耗时）
+    head = "✅ %s 完成" % mid + (" — " + brief if brief else "")
+    return "%s ｜ 本步 %s%s ｜ 累计 %s ｜ %s" % (
+        head, _fmt(step_total), breakdown, cumulative, now_local)
 
 
 def _window(a, b):

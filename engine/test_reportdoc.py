@@ -35,6 +35,10 @@ def _mk():
          "phase": "done", "attempt_count": 2, "max_attempts": 3},
     ]}, open(msf, "w", encoding="utf-8"), ensure_ascii=False)
     state.main(["set-milestones", sd, "--file", msf])
+    return _write_synth_events(sd)
+
+
+def _write_synth_events(sd):
     # 清掉 init 真实时间戳，写合成证据：M1 顺利、M2 撞超时白跑 + 一次返工
     with open(os.path.join(sd, "events.jsonl"), "w", encoding="utf-8") as f:
         f.write(json.dumps({"ts": "2026-06-24T00:00:10Z", "ev": "step_timing", "milestone": "M1",
@@ -49,6 +53,27 @@ def _mk():
                             "reason": "driver(impl) infra: driver timed out after 600s"}) + "\n")
         f.write(json.dumps({"ts": "2026-06-24T00:25:00Z", "ev": "fail", "milestone": "M2",
                             "error": "判官 REVISE：表单提交没真落库", "attempt": 1}) + "\n")
+    return sd
+
+
+def _mk_tricky():
+    """#9 回归夹具：无冒号长 goal、深冒号 goal、含管道符 goal —— 历史串列/详情空的三类。"""
+    proj = tempfile.mkdtemp(prefix="lhb-rdoc-tricky-")
+    sd = os.path.join(proj, ".longhaul")
+    state.main(["init", sd, "--one-liner", "tricky"])
+    msf = os.path.join(proj, "ms.json")
+    json.dump({"milestones": [
+        {"id": "T1", "goal": "全局交互反馈统一(按钮/采纳回链/toast)、空错态UX、长列表虚拟化、弱依赖核查",
+         "acceptance": {"type": "tdd"}, "status": "DONE", "phase": "done",
+         "attempt_count": 1, "max_attempts": 3},
+        {"id": "T2", "goal": "实时动态价值化(已完成→看产物) + 今日排期列全定时任务(schedules+crontab) + 缺勤趋势 hover + 备份健康(搬 agent-config-backup 状态：最近备份/成功失败/各仓分支/恢复手册)",
+         "acceptance": {"type": "tdd"}, "status": "DONE", "phase": "done",
+         "attempt_count": 1, "max_attempts": 3},
+        {"id": "T3", "goal": "左栏|右栏 双面板：A|B 同屏对比 + 导出",
+         "acceptance": {"type": "tdd"}, "status": "DONE", "phase": "done",
+         "attempt_count": 1, "max_attempts": 3},
+    ]}, open(msf, "w", encoding="utf-8"), ensure_ascii=False)
+    state.main(["set-milestones", sd, "--file", msf])
     return sd
 
 
@@ -91,6 +116,24 @@ def main():
     check("飞书 flavor 耗时段引出下方甘特", "下方为本轮" in fmd and "## 3 · 耗时" in fmd)
     check("报告不含 §5 焦点详述（用户砍了）", "5 · 焦点" not in md and "5 · 焦点" not in fmd)
     check("飞书 flavor 仍保留四段+表格+复盘", "1 · 背景" in fmd and "| 步 |" in fmd and "4a · 框架流程" in fmd and "4b · 项目本身" in fmd)
+
+    # —— #9 详情列根因修复：无冒号 / 深冒号 / 管道符 三类都稳健 ——
+    t_nc, d_nc = reportdoc._split_goal("全局交互反馈统一(按钮/采纳回链/toast)、空错态UX、长列表虚拟化、弱依赖核查")
+    check("#9 无冒号:做了什么=短标题", 0 < len(t_nc) <= reportdoc.TITLE_MAX)
+    check("#9 无冒号:详情不空(AC14 bug)", d_nc.strip() != "")
+    deep = "实时动态价值化(已完成→看产物) + 今日排期列全定时任务(schedules+crontab) + 缺勤趋势 hover + 备份健康(搬 agent-config-backup 状态：最近备份/成功失败/各仓分支/恢复手册)"
+    t_dp, d_dp = reportdoc._split_goal(deep)
+    check("#9 深冒号:做了什么不吞整句(AC4 bug)", len(t_dp) <= reportdoc.TITLE_MAX)
+    check("#9 深冒号:详情有内容", d_dp.strip() != "")
+    t_pp, d_pp = reportdoc._split_goal("左栏|右栏 双面板：A|B 同屏对比")
+    check("#9 管道符转义(单元格无裸竖线)",
+          "|" not in t_pp.replace("\\|", "") and "|" not in d_pp.replace("\\|", ""))
+    check("#9 空 goal 安全", reportdoc._split_goal("") == ("", "") and reportdoc._split_goal(None) == ("", ""))
+    # 表级回归：每数据行恒 6 列（转义后管道/深冒号都不串列）
+    ptbl = reportdoc.build_progress_table(_mk_tricky())
+    drows = [ln for ln in ptbl.splitlines() if ln.startswith("| `")]
+    npipes = [ln.replace("\\|", "\x00").count("|") for ln in drows]
+    check("#9 表格每行恒 6 列(管道/深冒号不串列)", len(drows) == 3 and all(n == 7 for n in npipes))
 
     # _one_liner 去 spec 骨架前缀
     d2 = tempfile.mkdtemp(prefix="lhb-one-")

@@ -38,9 +38,17 @@ def main():
         {"ts": "2026-06-24T00:04:30Z", "ev": "step_timing", "milestone": "M1",
          "phase": "impl_review", "step": "review", "started": "2026-06-24T00:04:00Z", "duration_ms": 30000},
     ])
+    # #9：播报必须带「做了什么」详情（最初只报 id+耗时，用户反复反馈缺详情）
+    with open(os.path.join(sd, "milestones.json"), "w", encoding="utf-8") as f:
+        json.dump({"milestones": [
+            {"id": "M1", "goal": "项目结构厚：重点项目自动判定(读 git+runs)、点项目进厚一页纸 #app [data-x]",
+             "status": "DONE"}]}, f, ensure_ascii=False)
     line = timeline.progress_line(sd, "M1")
     print("  渲染：", line)
     check("含 milestone 名 + '完成'", "M1" in line and "完成" in line)
+    check("#9 播报带「做了什么」详情(非只有id+耗时)", "项目结构厚" in line)
+    check("#9 播报详情去技术噪声(#选择器/[属性])", "#app" not in line and "data-x" not in line)
+    check("#9 brief 空 goal 安全", timeline._goal_brief("") == "" and timeline._goal_brief(None) == "")
     check("含'本步'总耗时(4m30s)", "本步" in line and ("4m30s" in line or "4m" in line))
     check("分阶段含'出方案 1m'", "出方案" in line and "1m" in line)
     check("分阶段含'实现 3m'", "实现" in line and "3m" in line)

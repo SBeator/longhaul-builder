@@ -83,18 +83,58 @@ def _clean_sum(s, limit=80):
     return head[:cut].rstrip(" +、。；/") + " 等"
 
 
-def _did_title(goal):
-    """第一列「做了什么」＝最简单介绍：goal 冒号前的标题。无冒号就取短摘要。"""
+#: 「做了什么」短标题硬上限（无冒号/深冒号回退路径用；靠前冒号时保留原标题不截断）。
+TITLE_MAX = 24
+#: 冒号被认作「标题：详情」分隔点的最大位置——超过即视为句中深冒号，不拿它切（否则标题吞整句）。
+TITLE_COLON_MAX = 60
+#: 无靠前冒号时取首个自然子句的断点。
+_CLAUSE_BRK = "+、。；/（(，,："
+
+
+def _cell(s):
+    """表格单元格安全化：转义管道符（否则串列错位）、去换行。"""
+    return (s or "").replace("\n", " ").replace("|", "\\|").strip()
+
+
+def _first_clause(g):
+    """无靠前冒号时，取首个自然子句作短标题（至少 4 字才肯断；都不断则硬截到 TITLE_MAX）。"""
+    for i, ch in enumerate(g):
+        if i >= 4 and ch in _CLAUSE_BRK:
+            return g[:i].strip()
+        if i >= TITLE_MAX:
+            return g[:i].strip()
+    return g.strip()
+
+
+def _split_goal(goal):
+    """把 goal 稳健拆成（做了什么=短标题, 详情=其余摘要）。
+
+    根因修复（#9，三类历史踩坑都覆盖）：
+      ① 无冒号 → 详情不再空（首子句作标题、其余进详情，AC14 bug）；
+      ② 深冒号（句中「…状态：」之类）→ 标题不再吞整句（只认靠前冒号，否则按子句切，AC4 bug）；
+      ③ 含管道符 → 转义，不串列。
+    """
     g = (goal or "").replace("\n", " ").strip()
-    ps = [g.find(s) for s in ("：", ":") if g.find(s) > 0]
-    return g[:min(ps)].strip() if ps else _clean_sum(g, 22)
+    if not g:
+        return "", ""
+    cols = [c for c in (g.find("："), g.find(":")) if 0 < c <= TITLE_COLON_MAX]
+    if cols:                                   # 靠前冒号＝天然分隔，标题保持原样（不截断）
+        i = min(cols)
+        title, detail = g[:i].strip(), _clean_sum(g[i + 1:])
+    else:                                      # 无冒号/深冒号：首子句作标题，其余清洗进详情（不留空）
+        title = _first_clause(g)
+        detail = _clean_sum(g[len(title):].lstrip(" +、，,。；;:：-—"))
+    return _cell(title), _cell(detail)
+
+
+def _did_title(goal):
+    """第一列「做了什么」＝短标题（薄封装 _split_goal，保留旧名）。"""
+    return _split_goal(goal)[0]
 
 
 def _did_detail(goal):
-    """第二列「详情」＝冒号后的修改内容摘要（清洗 + 边界收尾）。无冒号则空。"""
-    g = (goal or "").replace("\n", " ").strip()
-    ps = [g.find(s) for s in ("：", ":") if g.find(s) > 0]
-    return _clean_sum(g[min(ps) + 1:]) if ps else ""
+    """第二列「详情」＝其余摘要（薄封装 _split_goal，保留旧名）。"""
+    return _split_goal(goal)[1]
 
 
 def _signals(state_dir):
@@ -154,8 +194,9 @@ def build_progress_table(state_dir):
             note = "·".join("%s×%d" % (k, v) for k, v in kinds.items())
         else:
             note = "顺利" if m.get("status") == "DONE" else ""
+        did, detail = _split_goal(goal)
         out.append("| `%s` | %s | %s | %s | %s | %s |" % (
-            mid, _did_title(goal), _did_detail(goal), st, timing, note))
+            mid, did, detail, st, timing, _cell(note)))
     return "\n".join(out)
 
 
