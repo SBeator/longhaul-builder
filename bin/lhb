@@ -6,7 +6,7 @@
 # 用法：
 #   lhb new   <project-dir> "<一句话需求>"     # git init + 老化出 spec.md 骨架（人/agent 接着填）
 #   lhb plan  <project-dir>                     # spec.md → milestones.json（朴素骨架，按"可独立验收单元"重拆）
-#   lhb agents <project-dir> [--driver claude|codex] [--judge claude|codex]   # 定执行者/审查者(持久化)
+#   lhb agents <project-dir> [--plan c|x] [--plan-review c|x] [--impl c|x] [--impl-review c|x]   # 分阶段角色(持久化)；缺省 14=claude/23=codex。旧式 --driver/--judge 仍支持
 #   lhb confirm <project-dir> [--by 谁] [--force]  # ★P0 硬门：确认冻结、放行 build（--force 跳过 web 项目的 E2E 门校验）
 #   lhb run   <project-dir> [--once|--watch|--cron]   # 自驱（默认 --watch：while 循环跑到 done/blocked）
 #   lhb status <project-dir>                    # 看进度（哪步/完成几成/有没有 BLOCKED）
@@ -38,25 +38,35 @@ agent_cmd(){ # <role: driver|judge> <agent: claude|codex>
   esac
 }
 
-# 把角色分配持久化到 <sd>/agents.env（首次定好、之后一直用；lhb run 与 cron 都读它）。
-write_agents(){ # <sd> <driver-agent> <judge-agent>
-  { echo "# longhaul 角色分配——首次定好、整个项目一直用这套（cron 也读它）。"
-    printf "LONGHAUL_DRIVER_CMD='%s'\n" "$(agent_cmd driver "$2")"
-    printf "LONGHAUL_JUDGE_CMD='%s'\n" "$(agent_cmd judge "$3")"
-    echo "# 执行者(driver)=$2 ｜ 审查者(judge)=$3"
+# 把分阶段角色分配持久化到 <sd>/agents.env（首次定好、之后一直用；lhb run 与 cron 都读它）。
+# 4 个阶段各配一个 agent（#10a 地基）：出方案 plan / 审方案 plan_review / 实施 impl / 审实施 impl_review。
+write_agents(){ # <sd> <plan> <plan_review> <impl> <impl_review>
+  { echo "# longhaul 分阶段角色分配——首次定好、整个项目一直用这套（cron 也读它）。"
+    printf "LONGHAUL_DRIVER_CMD__plan='%s'\n"       "$(agent_cmd driver "$2")"
+    printf "LONGHAUL_JUDGE_CMD__plan_review='%s'\n" "$(agent_cmd judge  "$3")"
+    printf "LONGHAUL_DRIVER_CMD__impl='%s'\n"       "$(agent_cmd driver "$4")"
+    printf "LONGHAUL_JUDGE_CMD__impl_review='%s'\n" "$(agent_cmd judge  "$5")"
+    printf "LONGHAUL_DRIVER_CMD='%s'\n"             "$(agent_cmd driver "$2")"   # 通用兜底（per-stage 未命中时）
+    printf "LONGHAUL_JUDGE_CMD='%s'\n"              "$(agent_cmd judge  "$3")"
+    echo "# 出方案=$2 ｜ 审方案=$3 ｜ 实施=$4 ｜ 审实施=$5"
   } > "$1/agents.env"
 }
 
-# run 时：优先用持久化的角色分配；没有再回退默认。
-# 默认 = 执行者 Claude + 审查者 Codex（异构互审）；codex 没装则审查退回 claude，保证最小环境也能跑。
+# run 时：优先用持久化(agents.env)，没有再回退默认。
+# 默认分阶段（用户 2026-06-27 定，站 #10a 地基）：出方案=claude / 审方案=codex / 实施=codex / 审实施=claude
+#   —— 即「14=claude、23=codex」，异构每步互审；codex 没装则该步退回 claude，最小环境也能跑。
 # 不能用 ${VAR:=默认}——默认值里 {prompt_file} 的 '}' 会提前闭合参数展开、截断模板。
 default_bindings(){
+  local cx=claude; if command -v codex >/dev/null 2>&1; then cx=codex; fi
   if [ -z "${LONGHAUL_DRIVER_CMD:-}" ]; then LONGHAUL_DRIVER_CMD="$(agent_cmd driver claude)"; fi
-  if [ -z "${LONGHAUL_JUDGE_CMD:-}" ]; then
-    if command -v codex >/dev/null 2>&1; then LONGHAUL_JUDGE_CMD="$(agent_cmd judge codex)"
-    else LONGHAUL_JUDGE_CMD="$(agent_cmd judge claude)"; fi
-  fi
+  if [ -z "${LONGHAUL_JUDGE_CMD:-}" ];  then LONGHAUL_JUDGE_CMD="$(agent_cmd judge "$cx")"; fi
+  if [ -z "${LONGHAUL_DRIVER_CMD__plan:-}" ];       then LONGHAUL_DRIVER_CMD__plan="$(agent_cmd driver claude)"; fi
+  if [ -z "${LONGHAUL_JUDGE_CMD__plan_review:-}" ]; then LONGHAUL_JUDGE_CMD__plan_review="$(agent_cmd judge "$cx")"; fi
+  if [ -z "${LONGHAUL_DRIVER_CMD__impl:-}" ];       then LONGHAUL_DRIVER_CMD__impl="$(agent_cmd driver "$cx")"; fi
+  if [ -z "${LONGHAUL_JUDGE_CMD__impl_review:-}" ]; then LONGHAUL_JUDGE_CMD__impl_review="$(agent_cmd judge claude)"; fi
   export LONGHAUL_DRIVER_CMD LONGHAUL_JUDGE_CMD
+  export LONGHAUL_DRIVER_CMD__plan LONGHAUL_JUDGE_CMD__plan_review
+  export LONGHAUL_DRIVER_CMD__impl LONGHAUL_JUDGE_CMD__impl_review
 }
 load_bindings(){ # <sd>
   if [ -f "$1/agents.env" ]; then set -a; . "$1/agents.env"; set +a; fi
@@ -182,7 +192,7 @@ case "$cmd" in
     load_bindings "$SD"
     if [ "$MODE" = "--cron" ]; then
       echo "把这行加进 crontab（每 5 分钟一拍）："
-      echo "  */5 * * * *  LONGHAUL_DRIVER_CMD='$LONGHAUL_DRIVER_CMD' LONGHAUL_JUDGE_CMD='$LONGHAUL_JUDGE_CMD' $HERE/engine/loop.sh $SD >> $SD/loop.log 2>&1"
+      echo "  */5 * * * *  LONGHAUL_DRIVER_CMD='$LONGHAUL_DRIVER_CMD' LONGHAUL_JUDGE_CMD='$LONGHAUL_JUDGE_CMD' LONGHAUL_DRIVER_CMD__plan='$LONGHAUL_DRIVER_CMD__plan' LONGHAUL_JUDGE_CMD__plan_review='$LONGHAUL_JUDGE_CMD__plan_review' LONGHAUL_DRIVER_CMD__impl='$LONGHAUL_DRIVER_CMD__impl' LONGHAUL_JUDGE_CMD__impl_review='$LONGHAUL_JUDGE_CMD__impl_review' $HERE/engine/loop.sh $SD >> $SD/loop.log 2>&1"
       exit 0
     fi
     last=""
@@ -235,14 +245,21 @@ case "$cmd" in
     echo "✓ 已归档迭代 docs/iterations/$DIR/（report.md/html + state/ + meta）｜ INDEX 已重建${URL:+ ｜ 飞书 $URL}"
     ;;
   agents)
-    PROJ="${1:?usage: lhb agents <dir> [--driver claude|codex] [--judge claude|codex]}"; shift || true
-    DA=claude; JA=claude
+    PROJ="${1:?usage: lhb agents <dir> [--plan c|x] [--plan-review c|x] [--impl c|x] [--impl-review c|x] | [--driver c|x] [--judge c|x]}"; shift || true
+    # 默认分阶段：出方案=claude 审方案=codex 实施=codex 审实施=claude（14=claude/23=codex）
+    PLAN=claude; PREVIEW=codex; IMPL=codex; IREVIEW=claude
     while [ $# -gt 0 ]; do case "$1" in
-      --driver) DA="${2:?}"; shift 2;; --judge) JA="${2:?}"; shift 2;; *) shift;; esac; done
-    agent_cmd driver "$DA" >/dev/null || die "未知 driver agent '$DA'（只支持 claude|codex）"
-    agent_cmd judge  "$JA" >/dev/null || die "未知 judge agent '$JA'（只支持 claude|codex）"
-    write_agents "$(sd_of "$PROJ")" "$DA" "$JA"
-    echo "✓ 角色已定：执行者(driver)=$DA ｜ 审查者(judge)=$JA"
+      --plan) PLAN="${2:?}"; shift 2;;
+      --plan-review) PREVIEW="${2:?}"; shift 2;;
+      --impl) IMPL="${2:?}"; shift 2;;
+      --impl-review) IREVIEW="${2:?}"; shift 2;;
+      --driver) PLAN="${2:?}"; IMPL="${2:?}"; shift 2;;   # 旧式：两个 driver 阶段同一 agent
+      --judge)  PREVIEW="${2:?}"; IREVIEW="${2:?}"; shift 2;;   # 旧式：两个 judge 阶段同一 agent
+      *) shift;; esac; done
+    for a in "$PLAN" "$IMPL"; do agent_cmd driver "$a" >/dev/null || die "未知 agent '$a'（只支持 claude|codex）"; done
+    for a in "$PREVIEW" "$IREVIEW"; do agent_cmd judge "$a" >/dev/null || die "未知 agent '$a'（只支持 claude|codex）"; done
+    write_agents "$(sd_of "$PROJ")" "$PLAN" "$PREVIEW" "$IMPL" "$IREVIEW"
+    echo "✓ 分阶段角色：出方案=$PLAN ｜ 审方案=$PREVIEW ｜ 实施=$IMPL ｜ 审实施=$IREVIEW"
     echo "  写入 $(sd_of "$PROJ")/agents.env，整个项目（含 cron）之后一直用这套。" ;;
   say)
     PROJ="${1:?usage: lhb say <dir> <kind> ...}"; shift; KIND="${1:?kind}"; shift || true

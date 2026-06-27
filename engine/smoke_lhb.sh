@@ -99,6 +99,16 @@ ok "非 git 仓 graceful 跳过(exit 0)" "0" "$?"
 ok "LONGHAUL_AUTOCOMMIT=0 时 loop.sh 不调自动 commit" "1" \
    "$(grep -q 'LONGHAUL_AUTOCOMMIT' "$ENG/loop.sh" && echo 1 || echo 0)"
 
+echo "[T8] lhb agents 分阶段角色（默认 14=claude / 23=codex；可单阶段覆盖）"
+PA="$(mktemp -d)"; mkdir -p "$PA/.longhaul"; bash "$LHB" agents "$PA" >/dev/null 2>&1
+AE="$PA/.longhaul/agents.env"
+ok "出方案 plan=claude"        "1" "$(grep -q "DRIVER_CMD__plan=.*claude-driver" "$AE" && echo 1 || echo 0)"
+ok "审方案 plan_review=codex"  "1" "$(grep -q "JUDGE_CMD__plan_review=.*codex-judge" "$AE" && echo 1 || echo 0)"
+ok "实施 impl=codex"           "1" "$(grep -q "DRIVER_CMD__impl=.*codex-driver" "$AE" && echo 1 || echo 0)"
+ok "审实施 impl_review=claude" "1" "$(grep -q "JUDGE_CMD__impl_review=.*claude-judge" "$AE" && echo 1 || echo 0)"
+PB="$(mktemp -d)"; mkdir -p "$PB/.longhaul"; bash "$LHB" agents "$PB" --impl claude >/dev/null 2>&1
+ok "单阶段覆盖 --impl claude 生效" "1" "$(grep -q "DRIVER_CMD__impl=.*claude-driver" "$PB/.longhaul/agents.env" && echo 1 || echo 0)"
+
 echo ""
 echo "smoke_lhb：$PASS 绿 / $FAIL 红"
 [ "$FAIL" = 0 ]

@@ -49,7 +49,8 @@ lhb agents myproj --driver claude --judge codex   # recommended: Claude executes
 lhb agents myproj --driver codex  --judge claude   # or the other way around
 ```
 - **Set once and it's persisted** (written to `myproj/.longhaul/agents.env`); the whole project sticks with this setup afterward, and **cron reads it too** — no need to set it again each time.
-- Default (if you never ran `lhb agents`): **Claude executes + Codex reviews** (heterogeneous cross-review; if codex isn't installed, review falls back to claude).
+- Default (if you never ran `lhb agents`) = **per-stage heterogeneous cross-review**: plan=Claude / plan-review=Codex / impl=Codex / impl-review=Claude (each step reviewed by the other agent; falls back to claude per-step if codex isn't installed).
+- To change one stage: `lhb agents <dir> --plan c|x --plan-review c|x --impl c|x --impl-review c|x` (legacy `--driver/--judge` still work = same agent for both driver / both judge stages).
 - Switch models: `LONGHAUL_CLAUDE_MODEL` / `LONGHAUL_CODEX_MODEL`. To override just one run: override `LONGHAUL_DRIVER_CMD`/`LONGHAUL_JUDGE_CMD` directly.
 - Per-stage agents (#10a): on top of the generic slots, override per stage — `LONGHAUL_DRIVER_CMD__plan` / `__impl`, `LONGHAUL_JUDGE_CMD__plan_review` / `__impl_review` (per-stage slot wins, falls back to the generic slot, fully backward-compatible).
 - Plan multi-agent panel (#10b): `LONGHAUL_PLAN_PANEL="cmdA ||| cmdB"` (`|||`-separated, ≥2 to engage) → after the plan is drafted, N independent reviewers judge it and the verdicts aggregate (any "revise" wins → catches drift early; approve only if all pass). Falls back to single review when unset.

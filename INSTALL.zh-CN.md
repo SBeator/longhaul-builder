@@ -49,7 +49,8 @@ lhb agents myproj --driver claude --judge codex   # 推荐：执行 Claude、审
 lhb agents myproj --driver codex  --judge claude   # 或反过来
 ```
 - **首次定好就持久化**（写进 `myproj/.longhaul/agents.env`），整个项目之后一直用这套，**cron 也读它**——不用每次再定。
-- 缺省（没 `lhb agents` 过）：**执行 Claude + 审查 Codex**（异构互审；codex 没装则审查退回 claude）。
+- 缺省（没 `lhb agents` 过）＝**分阶段异构互审**：出方案 plan=Claude ｜ 审方案 plan_review=Codex ｜ 实施 impl=Codex ｜ 审实施 impl_review=Claude（每步都让另一方审；codex 没装则该步退回 claude）。
+- 想单独改某阶段：`lhb agents <dir> --plan c|x --plan-review c|x --impl c|x --impl-review c|x`（旧式 `--driver/--judge` 仍支持＝两个 driver 阶段 / 两个 judge 阶段同一 agent）。
 - 换模型：`LONGHAUL_CLAUDE_MODEL` / `LONGHAUL_CODEX_MODEL`。临时换某次：直接覆盖 `LONGHAUL_DRIVER_CMD`/`LONGHAUL_JUDGE_CMD`。
 - 分阶段配不同 agent（#10a）：在通用槽之上按阶段覆盖——`LONGHAUL_DRIVER_CMD__plan` / `__impl`、`LONGHAUL_JUDGE_CMD__plan_review` / `__impl_review`（分阶段槽最优先，没配回落通用槽，向后兼容）。
 - plan 多 agent panel（#10b）：`LONGHAUL_PLAN_PANEL="cmdA ||| cmdB"`（`|||` 分隔，≥2 个生效）→ 出方案后 N 个独立 reviewer 一起审、聚合（任一打回即打回，抓走偏；全过才放行）。没配回落单审。
