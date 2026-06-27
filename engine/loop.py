@@ -100,6 +100,20 @@ def resolve_driver_cmd(explicit=None, env=None, phase=None) -> str:
     return explicit or env.get("LONGHAUL_DRIVER_CMD") or DEFAULT_DRIVER_CMD
 
 
+PLAN_PANEL_DELIM = "|||"
+
+
+def resolve_plan_panel(env=None):
+    """#10b plan 多 agent 协同：`LONGHAUL_PLAN_PANEL` 用 `|||` 分隔多个 plan reviewer 命令。
+
+    返回去空白后的命令列表。配 ≥2 个 → plan_review 走 N 人 panel（_review 里判）；
+    没配 / 只 1 个 → 回落 #10a 的单审 judge（向后兼容）。
+    """
+    env = os.environ if env is None else env
+    raw = env.get("LONGHAUL_PLAN_PANEL") or ""
+    return [c.strip() for c in raw.split(PLAN_PANEL_DELIM) if c.strip()]
+
+
 # ---- cursor 侧 loop 私有账（infra_retries / infra_blocked / replan_count）-----
 # 这几段是 loop 维护的（基建第二维熔断 + replan 软上限），state.py 不碰。
 
@@ -756,10 +770,19 @@ def _verify(state_dir, mid, probe, opts):
 
 
 def _review(state_dir, mid, kind, opts):
-    """跑 review.review（可配置判官），返回 (result, exit 0|1|3) 按 review._exit_code_for。"""
-    res = review.review(state_dir, mid, kind=kind, judge_cmd=opts["judge_cmd"],
-                        ctx={"mode": "plan-only" if kind == "plan_review" else "implement"},
-                        timeout=opts["review_timeout"])
+    """跑 review（可配置判官），返回 (result, exit 0|1|3) 按 review._exit_code_for。
+
+    #10b：plan_review 且配了 ≥2 人 panel（LONGHAUL_PLAN_PANEL）→ 走多 agent panel 聚合；
+    否则走 #10a 的单审 judge（向后兼容）。
+    """
+    panel = opts.get("plan_panel") or []
+    if kind == "plan_review" and len(panel) >= 2:
+        res = review.review_panel(state_dir, mid, kind, judge_cmds=panel,
+                                  ctx={"mode": "plan-only"}, timeout=opts["review_timeout"])
+    else:
+        res = review.review(state_dir, mid, kind=kind, judge_cmd=opts["judge_cmd"],
+                            ctx={"mode": "plan-only" if kind == "plan_review" else "implement"},
+                            timeout=opts["review_timeout"])
     return res, review._exit_code_for(res)
 
 
@@ -1242,6 +1265,7 @@ def _opts_from_args(args):
     return {
         "driver_cmd": getattr(args, "driver_cmd", None),  # 原始显式；分阶段解析在调用点(resolve_driver_cmd phase=)
         "judge_cmd": getattr(args, "judge_cmd", None),  # review.resolve_judge_cmd 处理 env/默认/分阶段(kind=)
+        "plan_panel": resolve_plan_panel(),  # #10b：plan 多 agent panel（≥2 个才生效）
         "driver_timeout": getattr(args, "driver_timeout", DEFAULT_DRIVER_TIMEOUT),
         "driver_stuck_timeout": getattr(args, "driver_stuck_timeout", DEFAULT_DRIVER_STUCK_TIMEOUT),
         "probe_timeout": getattr(args, "probe_timeout", DEFAULT_PROBE_TIMEOUT),

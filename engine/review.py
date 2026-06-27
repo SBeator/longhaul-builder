@@ -397,6 +397,69 @@ def _exit_code_for(result: dict) -> int:
     return 1      # 白名单内但打回（FAIL/REVISE）——产品信号
 
 
+# ---- #10b plan 多 agent 协同：N 个独立 reviewer 组 panel 一起审 -----------------
+
+def _persist_panelist(state_dir, mid, kind, i, result):
+    """留每个 panelist 的审计文件 review-<kind>.panel-<i>.json（聚合裁定仍写 canonical）。"""
+    ev_dir = os.path.join(state_dir, state.EVIDENCE_DIR, mid)
+    try:
+        os.makedirs(ev_dir, exist_ok=True)
+        p = os.path.join(ev_dir, "review-%s.panel-%d.json" % (kind, i))
+        verify._atomic_write_text(p, json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+    except OSError:
+        pass
+
+
+def _aggregate_panel(mid, kind, results):
+    """聚合 panel 各家裁定 → 单一良构裁定（保守：任一要求打回即打回，最大化抓走偏）。
+
+    - 全员降级(ERROR/ok=False) → ERROR（基建，退回 infra，不烧 attempt）；
+    - 否则有效裁定里任一"非放行"(REVISE/FAIL) → 打回（合并各家理由）；
+    - 否则任一 APPROVE_WITH_CONDITIONS → 合并条件放行；否则全数放行。
+    """
+    pass_ish = PASS_ISH.get(kind, ())
+    valid = [r for r in results if r.get("ok") and r.get("verdict") != "ERROR"]
+    detail = "\n".join("  · panelist#%d [%s] %s"
+                       % (i, r.get("verdict"), (r.get("reason") or "")[:140])
+                       for i, r in enumerate(results))
+    n = len(results)
+    cmd = "panel(%d)" % n
+    if not valid:
+        return _result("ERROR", False, kind, {"panel": True, "n": n}, "", cmd, None, False, 0,
+                       mid, "plan panel 全员降级（judge 起不来/超时/畸形）：\n%s" % detail)
+    revisers = [r for r in valid if r["verdict"] not in pass_ish]
+    if revisers:
+        word = "REVISE" if kind == "plan_review" else "FAIL"
+        return _result(word, True, kind, {"panel": True, "n": n, "revisers": len(revisers)}, "", cmd,
+                       0, False, 0, mid,
+                       "plan panel %d 人审，%d 人要求打回（任一打回即打回，抓走偏）：\n%s"
+                       % (n, len(revisers), detail))
+    awc = [r for r in valid if r["verdict"] == "APPROVE_WITH_CONDITIONS"]
+    if awc:
+        return _result("APPROVE_WITH_CONDITIONS", True, kind, {"panel": True, "n": n}, "", cmd,
+                       0, False, 0, mid, "plan panel %d 人全数通过，合并各家附带条件：\n%s" % (n, detail))
+    return _result(pass_ish[0], True, kind, {"panel": True, "n": n}, "", cmd, 0, False, 0,
+                   mid, "plan panel %d 人全数通过：\n%s" % (n, detail))
+
+
+def review_panel(state_dir, milestone_id, kind="plan_review", judge_cmds=None, ctx=None,
+                 timeout=DEFAULT_TIMEOUT, env=None) -> dict:
+    """plan 多 agent 协同（#10b）：judge_cmds 里每个命令各起一个独立 reviewer 审同一份方案，
+    聚合成单一裁定写回 canonical（_phase_plan_review 照常读）。每个 panelist 另留审计文件。
+
+    站在 #10a 地基上：panel 的每一项就是一个"分阶段 agent"。配 1 个=单审；配 N 个=N 人 panel。
+    """
+    judge_cmds = [c for c in (judge_cmds or []) if (c or "").strip()]
+    results = []
+    for i, cmd in enumerate(judge_cmds):
+        r = review(state_dir, milestone_id, kind=kind, judge_cmd=cmd, ctx=ctx,
+                   timeout=timeout, env=env)   # 各自跑+(瞬时)覆盖 canonical，下面用聚合覆盖回去
+        results.append(r)
+        _persist_panelist(state_dir, milestone_id, kind, i, r)
+    agg = _aggregate_panel(milestone_id, kind, results)
+    return _persist(state_dir, milestone_id, agg)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="review.py",
