@@ -78,12 +78,19 @@ def _now():
     return state._now()
 
 
-def resolve_judge_cmd(explicit=None, env=None) -> str:
-    """judge 命令解析：CLI/API 显式 > 环境 LONGHAUL_JUDGE_CMD > 空哨兵默认（P0-2）。
+def resolve_judge_cmd(explicit=None, env=None, kind=None) -> str:
+    """judge 命令解析（#10a 分阶段可配不同 agent）：
 
-    三层取最先非空者；全空 → 返回 ""（review() 据此降级，明确报"未配置"，不乱猜 agent）。
+    分阶段 env `LONGHAUL_JUDGE_CMD__<kind>`（最具体，如 __plan_review / __impl_review）
+      > CLI/API 显式 > 通用 env `LONGHAUL_JUDGE_CMD` > 空哨兵默认（P0-2）。
+    没配分阶段就回落通用槽，**完全向后兼容**（kind=None 即旧行为）。
+    全空 → 返回 ""（review() 据此降级，明确报"未配置"，不乱猜 agent）。
     """
     env = os.environ if env is None else env
+    if kind:
+        per = env.get("LONGHAUL_JUDGE_CMD__%s" % kind)
+        if per:
+            return per
     return explicit or env.get("LONGHAUL_JUDGE_CMD") or DEFAULT_JUDGE_CMD
 
 
@@ -275,7 +282,7 @@ def review(state_dir, milestone_id, kind="impl_review", judge_cmd=None, ctx=None
     if kind not in VALID_VERDICTS:
         raise ValueError("unknown review kind: %r; expected one of %s"
                          % (kind, tuple(VALID_VERDICTS)))
-    cmd_template = resolve_judge_cmd(judge_cmd, env)
+    cmd_template = resolve_judge_cmd(judge_cmd, env, kind=kind)
 
     # 渲染 rubric + 证据索引（这步出错也优雅降级，不崩）。
     try:

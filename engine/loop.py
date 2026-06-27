@@ -80,12 +80,19 @@ RC_INFRA = "infra"
 
 # ---- driver 命令解析（与 review.resolve_judge_cmd 同构）----------------------
 
-def resolve_driver_cmd(explicit=None, env=None) -> str:
-    """driver 命令解析：CLI/API 显式 > 环境 LONGHAUL_DRIVER_CMD > 空哨兵默认（P0-2）。
+def resolve_driver_cmd(explicit=None, env=None, phase=None) -> str:
+    """driver 命令解析（#10a 分阶段可配不同 agent）：
 
+    分阶段 env `LONGHAUL_DRIVER_CMD__<phase>`（最具体，如 __plan / __impl）
+      > CLI/API 显式 > 通用 env `LONGHAUL_DRIVER_CMD` > 空哨兵默认（P0-2）。
+    没配分阶段就回落通用槽，**完全向后兼容**（phase=None 即旧行为）。未来 test/e2e 阶段同理扩展。
     全空 → "" ；invoke_driver 据此降级为 INFRA_FAIL（明确报"未配置"，不乱猜 agent）。
     """
     env = os.environ if env is None else env
+    if phase:
+        per = env.get("LONGHAUL_DRIVER_CMD__%s" % phase)
+        if per:
+            return per
     return explicit or env.get("LONGHAUL_DRIVER_CMD") or DEFAULT_DRIVER_CMD
 
 
@@ -607,7 +614,8 @@ def _phase_plan(state_dir, m, opts):
         print("[dry-run] phase=plan → driver(mode=plan-only) → advance-phase (plan→plan_review)")
         return 0
     (rc, _reason), _ = _timed(state_dir, mid, "plan", "driver",
-                              lambda: invoke_driver(opts["driver_cmd"], prompt, state_dir, mid,
+                              lambda: invoke_driver(resolve_driver_cmd(opts["driver_cmd"], phase="plan"),
+                                                    prompt, state_dir, mid,
                                                     "plan-only", opts["driver_timeout"]))
     if rc == RC_INFRA:
         return infra_retry(state_dir, mid, "driver(plan) infra: %s" % _reason,
@@ -656,7 +664,8 @@ def _phase_impl(state_dir, m, opts):
     _brc, _bout, _ = _git(_proj, "rev-parse", "HEAD")
     baseline = _bout.strip() if _brc == 0 and _bout.strip() else None
     (rc, _reason), _ = _timed(state_dir, mid, "impl", "driver",
-                              lambda: invoke_driver(opts["driver_cmd"], prompt, state_dir, mid,
+                              lambda: invoke_driver(resolve_driver_cmd(opts["driver_cmd"], phase="impl"),
+                                                    prompt, state_dir, mid,
                                                     "implement", opts["driver_timeout"]))
     if rc == RC_INFRA:
         return infra_retry(state_dir, mid, "driver(impl) infra: %s" % _reason,
@@ -1216,8 +1225,8 @@ def _tick_body(state_dir, opts):
 
 def _opts_from_args(args):
     return {
-        "driver_cmd": resolve_driver_cmd(getattr(args, "driver_cmd", None)),
-        "judge_cmd": getattr(args, "judge_cmd", None),  # review.resolve_judge_cmd 处理 env/默认
+        "driver_cmd": getattr(args, "driver_cmd", None),  # 原始显式；分阶段解析在调用点(resolve_driver_cmd phase=)
+        "judge_cmd": getattr(args, "judge_cmd", None),  # review.resolve_judge_cmd 处理 env/默认/分阶段(kind=)
         "driver_timeout": getattr(args, "driver_timeout", DEFAULT_DRIVER_TIMEOUT),
         "probe_timeout": getattr(args, "probe_timeout", DEFAULT_PROBE_TIMEOUT),
         "review_timeout": getattr(args, "review_timeout", DEFAULT_REVIEW_TIMEOUT),
