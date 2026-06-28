@@ -99,15 +99,17 @@ ok "非 git 仓 graceful 跳过(exit 0)" "0" "$?"
 ok "LONGHAUL_AUTOCOMMIT=0 时 loop.sh 不调自动 commit" "1" \
    "$(grep -q 'LONGHAUL_AUTOCOMMIT' "$ENG/loop.sh" && echo 1 || echo 0)"
 
-echo "[T8] lhb agents 分阶段角色（默认 14=claude / 23=codex；可单阶段覆盖）"
+echo "[T8] lhb agents 分阶段角色（无诉求=不写配置；自定义才写；选默认会清旧）"
+# 选默认 → 不写 agents.env（无配置 = 纯吃全局默认）
 PA="$(mktemp -d)"; mkdir -p "$PA/.longhaul"; bash "$LHB" agents "$PA" >/dev/null 2>&1
-AE="$PA/.longhaul/agents.env"
-ok "出方案 plan=claude"        "1" "$(grep -q "DRIVER_CMD__plan=.*claude-driver" "$AE" && echo 1 || echo 0)"
-ok "审方案 plan_review=codex"  "1" "$(grep -q "JUDGE_CMD__plan_review=.*codex-judge" "$AE" && echo 1 || echo 0)"
-ok "实施 impl=codex"           "1" "$(grep -q "DRIVER_CMD__impl=.*codex-driver" "$AE" && echo 1 || echo 0)"
-ok "审实施 impl_review=claude" "1" "$(grep -q "JUDGE_CMD__impl_review=.*claude-judge" "$AE" && echo 1 || echo 0)"
+ok "选默认 → 不写 agents.env" "1" "$([ ! -f "$PA/.longhaul/agents.env" ] && echo 1 || echo 0)"
+# 自定义（impl=claude，偏离默认）→ 写 agents.env
 PB="$(mktemp -d)"; mkdir -p "$PB/.longhaul"; bash "$LHB" agents "$PB" --impl claude >/dev/null 2>&1
-ok "单阶段覆盖 --impl claude 生效" "1" "$(grep -q "DRIVER_CMD__impl=.*claude-driver" "$PB/.longhaul/agents.env" && echo 1 || echo 0)"
+ok "自定义 → 写 agents.env"   "1" "$([ -f "$PB/.longhaul/agents.env" ] && echo 1 || echo 0)"
+ok "自定义 impl=claude 生效"  "1" "$(grep -q "DRIVER_CMD__impl=.*claude-driver" "$PB/.longhaul/agents.env" && echo 1 || echo 0)"
+# 在有旧配置的项目上"选默认" → 清掉旧 agents.env，回到无配置
+bash "$LHB" agents "$PB" >/dev/null 2>&1
+ok "选默认会清掉旧 agents.env" "1" "$([ ! -f "$PB/.longhaul/agents.env" ] && echo 1 || echo 0)"
 
 echo "[T9] spec-converge：spec 双 agent 收敛（stub proposer/reviewer，不调真 agent）"
 PS="$(mktemp -d)"; mkdir -p "$PS/.longhaul"; echo "# spec draft" > "$PS/.longhaul/spec.md"; echo "需求背景" > "$PS/.longhaul/p0-context.md"

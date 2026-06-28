@@ -273,9 +273,16 @@ case "$cmd" in
       *) shift;; esac; done
     for a in "$PLAN" "$IMPL"; do agent_cmd driver "$a" >/dev/null || die "未知 agent '$a'（只支持 claude|codex）"; done
     for a in "$PREVIEW" "$IREVIEW"; do agent_cmd judge "$a" >/dev/null || die "未知 agent '$a'（只支持 claude|codex）"; done
-    write_agents "$(sd_of "$PROJ")" "$PLAN" "$PREVIEW" "$IMPL" "$IREVIEW"
-    echo "✓ 分阶段角色：出方案=$PLAN ｜ 审方案=$PREVIEW ｜ 实施=$IMPL ｜ 审实施=$IREVIEW"
-    echo "  写入 $(sd_of "$PROJ")/agents.env，整个项目（含 cron）之后一直用这套。" ;;
+    SDA="$(sd_of "$PROJ")"
+    # 选的就是全局默认（14=claude/23=codex）→ **不写 agents.env**（无自定义诉求的项目不该有配置文件，
+    # 否则会把当时的默认"焊死"进项目、全局默认一变就过时）。已有的旧 agents.env 一并清掉，回到纯吃全局默认。
+    if [ "$PLAN" = "claude" ] && [ "$PREVIEW" = "codex" ] && [ "$IMPL" = "codex" ] && [ "$IREVIEW" = "claude" ]; then
+      [ -f "$SDA/agents.env" ] && { rm -f "$SDA/agents.env"; echo "✓ 角色 = 全局默认 → 已清掉旧 agents.env，项目改为纯吃全局默认（无配置）。"; } \
+                               || echo "✓ 角色 = 全局默认（出方案=claude/审方案=codex/实施=codex/审实施=claude）——无自定义，无需写 agents.env。"
+    else
+      write_agents "$SDA" "$PLAN" "$PREVIEW" "$IMPL" "$IREVIEW"
+      echo "✓ 分阶段角色（自定义，已写入 $SDA/agents.env，cron 也读它）：出方案=$PLAN ｜ 审方案=$PREVIEW ｜ 实施=$IMPL ｜ 审实施=$IREVIEW"
+    fi ;;
   say)
     PROJ="${1:?usage: lhb say <dir> <kind> ...}"; shift; KIND="${1:?kind}"; shift || true
     "$PY" "$ENG/loop.py" inbox "$(sd_of "$PROJ")" "$KIND" "$@"
