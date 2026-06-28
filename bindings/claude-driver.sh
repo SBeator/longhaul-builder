@@ -9,6 +9,7 @@
 # `--output-format json` 取 usage、把 `LHB_TOKENS in=N out=N` 打到 stdout，引擎据此记 token。
 # 改默认前需用真 claude 验一次 json usage 字段名；故先 opt-in，验过再默认开。
 set -u
+. "$(cd "$(dirname "$0")" && pwd)/compat.sh"   # 跨平台 lhb_timeout（Linux 用原生 timeout）
 PROMPT_FILE="${1:?prompt_file}"; STATE_DIR="${2:?state_dir}"; MID="${3:?mid}"; MODE="${4:-implement}"
 PROJECT="$(cd "$(dirname "$STATE_DIR")" 2>/dev/null && pwd)" || exit 2
 cd "$PROJECT" || exit 2
@@ -16,7 +17,7 @@ MARG=(); [ -n "${LONGHAUL_CLAUDE_MODEL:-}" ] && MARG=(--model "$LONGHAUL_CLAUDE_
 TO="${LONGHAUL_DRIVER_TIMEOUT:-900}"
 if [ "${LONGHAUL_CLAUDE_JSON:-0}" = "1" ]; then
   OUT="$(mktemp)"
-  timeout "$TO" claude -p --output-format json --dangerously-skip-permissions "${MARG[@]}" < "$PROMPT_FILE" > "$OUT"; rc=$?
+  lhb_timeout "$TO" claude -p --output-format json --dangerously-skip-permissions ${MARG[@]+"${MARG[@]}"} < "$PROMPT_FILE" > "$OUT"; rc=$?
   python3 - "$OUT" 2>/dev/null <<'PY' || cat "$OUT" 2>/dev/null
 import json, sys
 try:
@@ -31,4 +32,4 @@ except Exception:
 PY
   rm -f "$OUT"; exit $rc
 fi
-timeout "$TO" claude -p --dangerously-skip-permissions "${MARG[@]}" < "$PROMPT_FILE"
+lhb_timeout "$TO" claude -p --dangerously-skip-permissions ${MARG[@]+"${MARG[@]}"} < "$PROMPT_FILE"
