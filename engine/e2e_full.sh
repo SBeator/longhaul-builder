@@ -5,6 +5,7 @@
 # stub 签名同真绑定：driver={prompt_file} {state_dir} {milestone_id} {mode}；judge={prompt_file} {evidence_dir}。
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; ENG="$ROOT/engine"; LHB="$ROOT/bin/lhb"; PY="${PYTHON:-python3}"
+. "$ROOT/bindings/compat.sh"   # 跨平台 lhb_timeout（macOS 无原生 timeout）
 FIX="$ENG/fixtures/e2e"
 PASS=0; FAIL=0
 ok(){ if [ "$2" = "$3" ]; then echo "  ✓ $1"; PASS=$((PASS+1)); else echo "  ✗ $1 (期望:$2 实际:$3)"; FAIL=$((FAIL+1)); fi; }
@@ -65,7 +66,7 @@ ok "confirm 后 P0 放行"            "0" "$(grep -q '"p0_confirmed"\|p0' "$SD1/
 
 echo "[E2E-3] 真实自驱到 DONE（M2 触发返工）+ 分阶段 agent + 播报详情 + 自动 commit"
 export E2E_REWORK_MID=M2
-ST="$(timeout 150 bash -c "cd '$P1' && '$LHB' run '$P1' --watch >/dev/null 2>&1"; "$PY" "$ENG/loop.py" status "$SD1" --next-json 2>/dev/null)"
+ST="$(lhb_timeout 150 bash -c "cd '$P1' && '$LHB' run '$P1' --watch >/dev/null 2>&1"; "$PY" "$ENG/loop.py" status "$SD1" --next-json 2>/dev/null)"
 ok "跑到全 DONE"                  "1" "$(echo "$ST" | grep -q '\"state\": \"done\"' && echo 1 || echo 0)"
 ok "#10a 分阶段:出方案=planner"    "1" "$(grep -qE 'role=planner .*mode=plan-only' "$E2E_LOG" && echo 1 || echo 0)"
 ok "#10a 分阶段:实施=implementer"  "1" "$(grep -qE 'role=implementer .*mode=implement' "$E2E_LOG" && echo 1 || echo 0)"
@@ -92,7 +93,7 @@ ok "flag_raised 事件落账"          "1" "$(grep -q 'flag_raised' "$SD4/events
 echo "[E2E-5] #1 超时进度感知：impl 卡死被判死 → 续跑后完成（真 loop）"
 P5="$(mk_proj stuck 1)"; SD5="$P5/.longhaul"; "$LHB" confirm "$P5" --by e2e --force >/dev/null 2>&1
 export E2E_STUCK_MID=M1
-ST5="$(timeout 90 bash -c "while ! '$PY' '$ENG/loop.py' status '$SD5' --next-json 2>/dev/null | grep -q '\"state\": \"done\"'; do bash '$ENG/loop.sh' '$SD5' >/dev/null 2>&1 || true; done; echo ok" 2>/dev/null || echo timeout)"
+ST5="$(lhb_timeout 90 bash -c "while ! '$PY' '$ENG/loop.py' status '$SD5' --next-json 2>/dev/null | grep -q '\"state\": \"done\"'; do bash '$ENG/loop.sh' '$SD5' >/dev/null 2>&1 || true; done; echo ok" 2>/dev/null || echo timeout)"
 unset E2E_STUCK_MID
 ok "卡死被判死(infra_retry timed out)" "1" "$(grep -q 'timed out\|stuck' "$SD5/events.jsonl" 2>/dev/null && echo 1 || echo 0)"
 ok "续跑后 M1 跑完 DONE"          "1" "$("$PY" "$ENG/loop.py" status "$SD5" --next-json 2>/dev/null | grep -q '\"state\": \"done\"' && echo 1 || echo 0)"
