@@ -5,6 +5,7 @@
 #   用法：bash engine/smoke_lhb.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; ENG="$ROOT/engine"; LHB="$ROOT/bin/lhb"; PY="${PYTHON:-python3}"
+. "$ROOT/bindings/compat.sh"   # 跨平台 lhb_timeout（macOS 无原生 timeout）
 PASS=0; FAIL=0
 ok(){ if [ "$2" = "$3" ]; then echo "  ✓ $1"; PASS=$((PASS+1)); else echo "  ✗ $1 (期望:$2 实际:$3)"; FAIL=$((FAIL+1)); fi; }
 
@@ -19,7 +20,7 @@ mk(){ local p; p="$(mktemp -d)/proj"; mkdir -p "$p"; ( cd "$p" && git init -q );
 echo "[T1] abort 后 lhb run 立刻 break、不空转（P0-4）"
 P="$(mk)"; "$PY" "$ENG/loop.py" inbox "$P/.longhaul" abort >/dev/null 2>&1
 export LONGHAUL_DRIVER_CMD='echo driver' LONGHAUL_JUDGE_CMD='echo judge'
-OUT="$(cd "$P" && timeout 20 bash "$LHB" run "$P" 2>&1)"; RC=$?
+OUT="$(cd "$P" && lhb_timeout 20 bash "$LHB" run "$P" 2>&1)"; RC=$?
 ok "abort 后 run 超时前自行退出（不 hang）" "0" "$([ $RC -eq 124 ] && echo 1 || echo 0)"
 ok "abort 后输出含 ABORTED" "1" "$(echo "$OUT" | grep -q 'ABORTED' && echo 1 || echo 0)"
 unset LONGHAUL_DRIVER_CMD LONGHAUL_JUDGE_CMD
@@ -40,7 +41,7 @@ echo "[T3] run 在边角项目（无 milestones）上必终止、不空转（don
 # 注：rc=2(缺 milestones.json) 经 lhb run 实际被 done-guard 遮蔽（零 milestone→done→顶部 break），
 # 不可达；catch-all `*)` 是让"0 才继续、其余都停"契约显式化的防御。这里测真正的安全属性：会终止。
 P3="$(mktemp -d)/proj"; mkdir -p "$P3/.longhaul"
-OUT3="$(cd "$P3" && timeout 15 bash "$LHB" run "$P3" 2>&1)"; RC3=$?
+OUT3="$(cd "$P3" && lhb_timeout 15 bash "$LHB" run "$P3" 2>&1)"; RC3=$?
 ok "无 milestones 项目 run 超时前终止（不空转）" "0" "$([ $RC3 -eq 124 ] && echo 1 || echo 0)"
 ok "且明确发出终态信号（非静默空转）" "1" \
    "$(echo "$OUT3" | grep -qE 'DONE|退出码|BLOCKED|ABORTED' && echo 1 || echo 0)"
